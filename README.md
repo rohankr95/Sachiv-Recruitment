@@ -115,6 +115,37 @@ Changes to `Field_Config` take effect within 10 minutes, or straight away via **
 
 Quotas: Apps Script allows 6 minutes per execution and about 30 simultaneous executions per user. A typical submission finishes in 1–5 seconds. The script lock waits up to 30 seconds, after which the applicant sees "server busy, please submit again".
 
+## 6a. Running it locally (preview without deploying)
+
+Apps Script only really runs on Google's servers. For trying the screens and the workflow on your own computer, `local-test/dev-server.js` runs the **same code** against an in-memory imitation of Sheets and Drive.
+
+**Requirements:** [Node.js 18+](https://nodejs.org). Python 3 with `openpyxl` is needed only to load your own Excel file.
+
+```bash
+git clone https://github.com/rohankr95/Sachiv-Recruitment.git
+cd Sachiv-Recruitment
+git checkout claude/hopeful-euler-9e43bz
+node local-test/dev-server.js
+```
+
+Open <http://localhost:8080/> for the applicant portal (the terminal prints sample logins), or <http://localhost:8080/?page=admin> for the admin dashboard (`admin` / `Admin-Pass-123`).
+
+**With your own data:** export the sheet from Google Sheets as `.xlsx`, then:
+
+```bash
+pip install openpyxl
+python local-test/xlsx-to-json.py  ~/Downloads/export.xlsx  ~/sheet.json
+node local-test/dev-server.js ~/sheet.json
+```
+
+Keep `sheet.json` **outside** the repository, because it contains applicant data.
+
+**Limitations of local mode:**
+* Everything is held in memory and resets when you press Ctrl+C. Your real spreadsheet is never touched.
+* Documents are placeholder PDFs; real Drive files can't be opened locally.
+* The server listens on `127.0.0.1` only. Never put it on the internet.
+* The real portal must be deployed to Apps Script (§6).
+
 ## 7. Workflow
 
 Login → Verify Application (list, with duplicate flags) → Edit Details (modified fields highlighted, original value shown with Undo) → Preview (original ➜ corrected, documents existing ➜ new, declaration) → Submit (confirmation dialog) → Confirmation (transaction ID, printable).
