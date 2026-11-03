@@ -1,0 +1,971 @@
+<script>
+/**
+ * JavaScript.html – applicant portal front end.
+ * All data comes from server functions via google.script.run; nothing
+ * sensitive is stored in the page except the opaque session token
+ * (sessionStorage, cleared on logout / tab close).
+ */
+(function () {
+  'use strict';
+
+  var CFG = window.PORTAL_CONFIG || {};
+  var TOKEN_KEY = 'acp_session_token';
+  var PDFJS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+  var PDFJS_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+  var S = {
+    token: null,
+    masked: '',
+    applications: [],
+    app: null,          // application currently being edited
+    fields: [],         // flat list of non-document fields
+    docs: [],           // document fields
+    original: {},       // key -> original form value
+    values: {},         // key -> current form value
+    staged: {},         // doc key -> {name,size,mimeType}
+    idleSeconds: CFG.idleTimeoutSeconds || 900,
+    lastContact: Date.now(),
+    lastKeepAlive: 0,
+    warned: false,
+    busy: 0,
+    objectUrl: null
+  };
+
+  /* ------------------------------------------------------------------ */
+  /* Utilities                                                           */
+  /* ------------------------------------------------------------------ */
+  function $(id) { return document.getElementById(id); }
+  function h(v) {
+    return String(v === null || v === undefined ? '' : v)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/`/g, '&#96;');
+  }
+  function show(el, on) { (typeof el === 'string' ? $(el) : el).classList.toggle('d-none', !on); }
+  function fmtSize(bytes) {
+    if (!bytes && bytes !== 0) return '';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(0) + ' KB';
+    return (bytes / 1048576).toFixed(2) + ' MB';
+  }
+  function isoToDisplay(iso) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || '');
+    return m ? m[3] + '/' + m[2] + '/' + m[1] : (iso || '');
+  }
+  function todayIso() {
+    var d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+  function storage(action, value) {
+    try {
+      if (action === 'get') return window.sessionStorage.getItem(TOKEN_KEY);
+      if (action === 'set') window.sessionStorage.setItem(TOKEN_KEY, value);
+      if (action === 'del') window.sessionStorage.removeItem(TOKEN_KEY);
+    } catch (e) { /* storage unavailable – session simply won't survive a refresh */ }
+    return null;
+  }
+  function statusBadge(status) {
+    var cls = 'bg-secondary';
+    if (status === 'Modified') cls = 'bg-info text-dark';
+    else if (status === 'Pending Approval') cls = 'bg-warning text-dark';
+    else if (status === 'Approved') cls = 'bg-success';
+    else if (status === 'Rejected') cls = 'bg-danger';
+    return '<span class="badge ' + cls + '">' + h(status || 'Not corrected') + '</span>';
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Server calls                                                        */
+  /* ------------------------------------------------------------------ */
+  function server(fn, args) {
+    return new Promise(function (resolve, reject) {
+      var runner = google.script.run
+        .withSuccessHandler(function (res) {
+          if (!res) return reject({ code: 'SERVER_ERROR', message: 'Empty response from the server. Please try again.' });
+          if (res.ok) resolve(res.data); else reject(res);
+        })
+        .withFailureHandler(function (err) {
+          reject({ code: 'NETWORK', message: 'Could not reach the server. Please check your internet connection and try again.' + (err && err.message ? ' (' + err.message + ')' : '') });
+        });
+      runner[fn].apply(runner, args || []);
+    });
+  }
+
+  function call(fn, args, opts) {
+    opts = opts || {};
+    if (!opts.silent) showLoader(opts.loading || 'Please wait…');
+    return server(fn, args).then(function (data) {
+      S.lastContact = Date.now();
+      return data;
+    }).catch(function (err) {
+      if (err && err.code === 'SESSION_EXPIRED' && fn !== 'login') {
+        sessionExpired(err.message);
+      }
+      throw err;
+    }).finally(function () {
+      if (!opts.silent) hideLoader();
+    });
+  }
+
+  function showLoader(text) {
+    S.busy++;
+    $('loaderText').textContent = text;
+    show('loader', true);
+  }
+  function hideLoader() {
+    S.busy = Math.max(0, S.busy - 1);
+    if (!S.busy) show('loader', false);
+  }
+
+  function alertBox(type, message) {
+    var el = $('globalAlert');
+    if (!message) { show(el, false); return; }
+    el.className = 'alert alert-' + type;
+    el.textContent = message;
+    show(el, true);
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  function toast(message, type) {
+    var id = 't' + Date.now();
+    var html = '<div id="' + id + '" class="toast align-items-center text-bg-' + (type || 'success') + ' border-0" role="status" aria-live="polite">' +
+      '<div class="d-flex"><div class="toast-body">' + h(message) + '</div>' +
+      '<button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button></div></div>';
+    $('toastArea').insertAdjacentHTML('beforeend', html);
+    var t = new bootstrap.Toast($(id), { delay: 4000 });
+    $(id).addEventListener('hidden.bs.toast', function () { var n = $(id); if (n) n.remove(); });
+    t.show();
+  }
+
+  function errorMessage(err) {
+    return (err && err.message) ? err.message : 'Something went wrong. Please try again.';
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Views and stepper                                                   */
+  /* ------------------------------------------------------------------ */
+  var VIEW_STEP = { login: 1, select: 2, edit: 3, preview: 4, confirm: 6 };
+
+  function showView(name) {
+    ['login', 'select', 'edit', 'preview', 'confirm'].forEach(function (v) { show('view-' + v, v === name); });
+    setStep(VIEW_STEP[name]);
+    alertBox(null, '');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    var loggedIn = !!S.token;
+    show('btnLogout', loggedIn);
+    show('sessionTimer', loggedIn);
+    tick();
+  }
+
+  function setStep(n) {
+    document.querySelectorAll('#stepper li').forEach(function (li) {
+      var s = Number(li.getAttribute('data-step'));
+      li.classList.toggle('done', s < n);
+      li.classList.toggle('active', s === n);
+      if (s === n) li.setAttribute('aria-current', 'step'); else li.removeAttribute('aria-current');
+    });
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Login                                                               */
+  /* ------------------------------------------------------------------ */
+  function initLogin() {
+    $('loginDob').max = todayIso();
+    if (!CFG.portalOpen) {
+      $('portalClosedNotice').textContent = CFG.portalClosedMessage + ' You can log in to view your application, but corrections cannot be submitted.';
+      show('portalClosedNotice', true);
+    }
+    $('supportText').textContent = CFG.supportText || '';
+    $('loginIdentifier').addEventListener('input', function () {
+      var v = this.value.trim();
+      $('identifierIcon').className = v.indexOf('@') !== -1 ? 'fa-solid fa-at' : (/^[+\d\s-]+$/.test(v) && v ? 'fa-solid fa-mobile-screen' : 'fa-solid fa-at');
+      setInlineError('loginIdentifier', '');
+    });
+    $('loginDob').addEventListener('input', function () { setInlineError('loginDob', ''); });
+    $('loginForm').addEventListener('submit', function (e) {
+      e.preventDefault();
+      doLogin();
+    });
+  }
+
+  function setInlineError(inputId, msg) {
+    $(inputId + 'Error').textContent = msg || '';
+    $(inputId).classList.toggle('is-invalid', !!msg);
+  }
+
+  function validateIdentifier(v) {
+    if (!v) return 'Enter your registered email address or mobile number.';
+    if (v.indexOf('@') !== -1) return /^[^\s@]+@[^\s@]+\.[A-Za-z]{2,}$/.test(v) ? '' : 'Enter a valid email address.';
+    if (/[A-Za-z]/.test(v)) return 'Enter a valid email address or 10-digit mobile number.';
+    var d = v.replace(/\D/g, '');
+    if (d.length > 10) d = d.slice(-10);
+    return new RegExp(CFG.mobileRegex || '^[6-9][0-9]{9}$').test(d) ? '' : 'Enter a valid 10-digit mobile number.';
+  }
+
+  function doLogin() {
+    show('loginError', false);
+    var id = $('loginIdentifier').value.trim();
+    var dob = $('loginDob').value;
+    var e1 = validateIdentifier(id);
+    var e2 = !dob ? 'Enter your date of birth.' : (dob > todayIso() ? 'Date of birth cannot be in the future.' : '');
+    setInlineError('loginIdentifier', e1);
+    setInlineError('loginDob', e2);
+    if (e1 || e2) return;
+    $('btnLogin').disabled = true;
+    call('login', [id, dob], { loading: 'Verifying your details…' }).then(function (data) {
+      S.token = data.token;
+      S.idleSeconds = data.idleTimeoutSeconds || S.idleSeconds;
+      S.masked = data.maskedIdentifier;
+      S.lastContact = Date.now();
+      storage('set', S.token);
+      $('loginForm').reset();
+      handleApplicationList(data.applications, true);
+    }).catch(function (err) {
+      $('loginError').textContent = errorMessage(err);
+      show('loginError', true);
+    }).finally(function () {
+      $('btnLogin').disabled = false;
+    });
+  }
+
+  function handleApplicationList(apps, autoOpenSingle) {
+    S.applications = apps || [];
+    var anyDuplicate = S.applications.some(function (a) { return a.duplicateEmail || a.duplicateMobile; });
+    if (autoOpenSingle && S.applications.length === 1 && !anyDuplicate) {
+      openApplication(S.applications[0].applicationNumber);
+      return;
+    }
+    renderApplicationList();
+    showView('select');
+  }
+
+  function renderApplicationList() {
+    $('loggedInAs').textContent = S.masked || '';
+    var anyDuplicate = S.applications.some(function (a) { return a.duplicateEmail || a.duplicateMobile || a.duplicateRecord; });
+    show('duplicateNotice', anyDuplicate);
+    $('applicationList').innerHTML = S.applications.map(function (a) {
+      var badges = [statusBadge(a.status)];
+      badges.push('<span class="badge text-bg-light border">Corrections: ' + h(a.correctionCount) + '</span>');
+      if (a.duplicateEmail) badges.push('<span class="badge badge-duplicate"><i class="fa-solid fa-clone me-1"></i>Duplicate email (' + h(a.emailShareCount) + ' applications)</span>');
+      if (a.duplicateMobile) badges.push('<span class="badge badge-duplicate"><i class="fa-solid fa-clone me-1"></i>Duplicate mobile (' + h(a.mobileShareCount) + ' applications)</span>');
+      if (a.duplicateRecord) badges.push('<span class="badge bg-danger">Duplicate application number – contact helpdesk</span>');
+      return '<div class="app-item d-flex flex-wrap justify-content-between align-items-center gap-3">' +
+        '<div class="flex-grow-1">' +
+          '<div class="meta-label">Application Number</div>' +
+          '<div class="fs-5 fw-bold text-primary text-break">' + h(a.applicationNumber) + '</div>' +
+          '<div class="mb-1">' + h(a.applicantName || '') + '</div>' +
+          '<div class="d-flex flex-wrap gap-1">' + badges.join('') + '</div>' +
+          (a.lastModified ? '<div class="small text-muted mt-1">Last corrected: ' + h(a.lastModified) + '</div>' : '') +
+        '</div>' +
+        '<button type="button" class="btn btn-primary js-open-app" data-app="' + h(a.applicationNumber) + '">' +
+          '<i class="fa-solid fa-pen-to-square me-1"></i>Open &amp; Correct</button>' +
+      '</div>';
+    }).join('') || '<div class="alert alert-info">No applications found.</div>';
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Application form                                                    */
+  /* ------------------------------------------------------------------ */
+  function openApplication(appNo) {
+    call('loadApplication', [S.token, appNo], { loading: 'Retrieving your application…' }).then(function (app) {
+      S.app = app;
+      S.fields = [];
+      S.original = {};
+      S.values = {};
+      app.sections.forEach(function (sec) {
+        sec.fields.forEach(function (f) {
+          f.section = sec.name;
+          S.fields.push(f);
+          S.original[f.key] = f.value;
+          S.values[f.key] = f.value;
+        });
+      });
+      S.docs = app.documents || [];
+      S.staged = {};
+      S.docs.forEach(function (d) { if (d.staged) S.staged[d.key] = d.staged; });
+      renderForm();
+      showView('edit');
+    }).catch(function (err) {
+      if (err.code !== 'SESSION_EXPIRED') alertBox('danger', errorMessage(err));
+    });
+  }
+
+  function renderForm() {
+    var app = S.app;
+    $('editAppNo').textContent = app.applicationNumber;
+    $('editAppName').textContent = app.applicantName || '—';
+    $('editAppStatus').innerHTML = statusBadge(app.status);
+    $('editAppCount').textContent = app.correctionCount;
+    var dup = app.duplicate;
+    var dupHtml = [];
+    if (dup && dup.email) dupHtml.push('<span class="badge badge-duplicate me-1"><i class="fa-solid fa-clone me-1"></i>Duplicate email – registered on ' + h(dup.email) + ' applications</span>');
+    if (dup && dup.mobile) dupHtml.push('<span class="badge badge-duplicate me-1"><i class="fa-solid fa-clone me-1"></i>Duplicate mobile – registered on ' + h(dup.mobile) + ' applications</span>');
+    $('editDuplicateFlag').innerHTML = dupHtml.join('');
+    show('editDuplicateFlag', dupHtml.length > 0);
+    show('btnBackToList', S.applications.length > 1);
+
+    if (!app.canSubmit) {
+      $('editBlocked').textContent = app.blockedReason;
+      show('editBlocked', true);
+    } else {
+      show('editBlocked', false);
+    }
+
+    var idx = 0;
+    $('formSections').innerHTML = app.sections.map(function (sec) {
+      var body = sec.fields.map(function (f) {
+        var html = fieldHtml(f, idx);
+        f._i = idx;
+        idx++;
+        return html;
+      }).join('');
+      return '<div class="portal-card">' +
+        '<div class="card-header d-flex align-items-center"><span class="section-icon"><i class="fa-solid ' + h(sec.icon) + '"></i></span>' + h(sec.name) + '</div>' +
+        '<div class="card-body p-3"><div class="row g-3">' + body + '</div></div></div>';
+    }).join('');
+
+    $('documentsTitle').textContent = app.documentSectionName || 'Uploaded Documents';
+    $('allowedTypesText').textContent = (CFG.allowedExtensions || ['pdf', 'jpg', 'jpeg']).join(', ').toUpperCase();
+    $('maxSizeText').textContent = CFG.maxFileSizeMb;
+    show('documentsCard', S.docs.length > 0);
+    renderDocuments();
+
+    if (!app.canSubmit) {
+      document.querySelectorAll('#formSections input, #formSections select, #formSections textarea').forEach(function (el) { el.disabled = true; });
+    }
+    $('btnPreview').disabled = !app.canSubmit;
+    $('btnResetAll').disabled = !app.canSubmit;
+    S.fields.forEach(function (f) { refreshFieldState(f, false); });
+    updateCounter();
+  }
+
+  function fieldHtml(f, i) {
+    var id = 'fld-' + i;
+    var col = f.type === 'textarea' ? 'col-12' : 'col-12 col-md-6';
+    var label = '<label class="form-label" for="' + id + '">' + h(f.label) + (f.required && f.editable ? '<span class="req" aria-hidden="true">*</span>' : '') +
+      ' <span class="badge badge-modified ms-1 d-none" id="mod-' + i + '">Modified</span></label>';
+    var control;
+    if (!f.editable) {
+      var shown = f.type === 'date' ? (f.displayValue || '') : (f.value || '');
+      control = '<div class="readonly-value" id="' + id + '" aria-readonly="true"><i class="fa-solid fa-lock me-2"></i>' + (shown ? h(shown) : '<span class="text-muted">Not provided</span>') + '</div>';
+      return '<div class="' + col + '"><div class="field-wrap">' + label.replace('<label class="form-label" for="' + id + '">', '<label class="form-label">') + control +
+        (f.help ? '<div class="help-text mt-1">' + h(f.help) + '</div>' : '') + '</div></div>';
+    }
+    var common = ' id="' + id + '" data-i="' + i + '" name="' + id + '"' + (f.required ? ' required aria-required="true"' : '') + ' aria-describedby="err-' + i + '"';
+    var val = h(f.value);
+    switch (f.type) {
+      case 'textarea':
+        control = '<textarea class="form-control js-field" rows="3" maxlength="' + f.maxLength + '"' + common + '>' + val + '</textarea>';
+        break;
+      case 'select':
+        var opts = f.options.slice();
+        var current = f.value;
+        var hasCurrent = !current || opts.some(function (o) { return o.toLowerCase() === String(current).toLowerCase(); });
+        control = '<select class="form-select js-field"' + common + '><option value="">-- Select --</option>' +
+          (!hasCurrent ? '<option value="' + val + '" selected>' + val + ' (current)</option>' : '') +
+          opts.map(function (o) { return '<option value="' + h(o) + '"' + (String(o).toLowerCase() === String(current).toLowerCase() ? ' selected' : '') + '>' + h(o) + '</option>'; }).join('') +
+          '</select>';
+        break;
+      case 'date':
+        control = '<input type="date" class="form-control js-field" value="' + val + '" min="1900-01-01" max="2100-12-31"' +
+          ((f.role === 'dob' || /birth|\bdob\b/i.test(f.label)) ? ' data-past="1"' : '') + common + '>';
+        if (f.unparsedValue) control += '<div class="help-text text-danger mt-1">Existing value "' + h(f.unparsedValue) + '" is not a valid date – please select the correct date.</div>';
+        break;
+      case 'email':
+        control = '<input type="email" class="form-control js-field" inputmode="email" autocapitalize="off" spellcheck="false" maxlength="254" value="' + val + '"' + common + '>';
+        break;
+      case 'mobile':
+        control = '<input type="tel" class="form-control js-field" inputmode="numeric" maxlength="16" placeholder="10-digit mobile number" value="' + val + '"' + common + '>';
+        break;
+      case 'pincode':
+        control = '<input type="text" class="form-control js-field" inputmode="numeric" maxlength="6" placeholder="6-digit PIN" value="' + val + '"' + common + '>';
+        break;
+      case 'number':
+        control = '<input type="text" class="form-control js-field" inputmode="decimal" maxlength="' + f.maxLength + '" value="' + val + '"' + common + '>';
+        break;
+      default:
+        control = '<input type="text" class="form-control js-field" maxlength="' + f.maxLength + '" value="' + val + '"' + common + '>';
+    }
+    return '<div class="' + col + '"><div class="field-wrap" id="wrap-' + i + '">' + label + control +
+      '<div class="invalid-feedback d-block" id="err-' + i + '"></div>' +
+      '<div class="original-value d-none" id="orig-' + i + '"></div>' +
+      (f.help ? '<div class="help-text mt-1">' + h(f.help) + '</div>' : '') +
+      '</div></div>';
+  }
+
+  /** Same normalisation the server uses to decide whether a value changed. */
+  function norm(f, v) {
+    var s = v === null || v === undefined ? '' : String(v);
+    switch (f.type) {
+      case 'email': return s.trim().toLowerCase();
+      case 'mobile': var d = s.replace(/\D/g, ''); if (d.length > 10) d = d.slice(-10); return /[A-Za-z]/.test(s) ? s.trim() : (d || s.trim());
+      case 'number': return s.replace(/,/g, '').trim();
+      case 'pincode': return s.replace(/\s+/g, '');
+      case 'textarea': return s.replace(/\r\n?/g, '\n').replace(/[ \t]+/g, ' ').trim();
+      default: return s.replace(/\s+/g, ' ').trim();
+    }
+  }
+
+  function isModified(f) { return f.editable && norm(f, S.values[f.key]) !== norm(f, S.original[f.key]); }
+
+  /** Client-side validation (the server re-validates everything). */
+  function validateField(f) {
+    if (!f.editable) return '';
+    var v = S.values[f.key] === undefined ? '' : String(S.values[f.key]);
+    var trimmed = v.trim();
+    var changed = isModified(f);
+    if (!trimmed) return f.required ? 'This field is required.' : '';
+    if (!changed) return '';
+    if (/[<>]/.test(v)) return 'The characters < and > are not allowed.';
+    if (v.length > f.maxLength) return 'Maximum ' + f.maxLength + ' characters allowed.';
+    var n = norm(f, v);
+    switch (f.type) {
+      case 'email':
+        if (!/^[^\s@<>()[\]\\,;:"]+@[^\s@<>()[\]\\,;:"]+\.[A-Za-z]{2,}$/.test(n)) return 'Enter a valid email address.';
+        break;
+      case 'mobile':
+        if (!new RegExp(CFG.mobileRegex || '^[6-9][0-9]{9}$').test(n)) return 'Enter a valid 10-digit mobile number.';
+        break;
+      case 'pincode':
+        if (!/^[1-9][0-9]{5}$/.test(n)) return 'Enter a valid 6-digit PIN code.';
+        break;
+      case 'number':
+        if (!/^-?\d+(\.\d+)?$/.test(n)) return 'Enter a valid number.';
+        break;
+      case 'date':
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(n) || isNaN(new Date(n + 'T00:00:00').getTime())) return 'Enter a valid date.';
+        if (n < '1900-01-01' || n > '2100-12-31') return 'Enter a valid date.';
+        if ((f.role === 'dob' || /birth|\bdob\b/i.test(f.label)) && n >= todayIso()) return 'Date of birth must be in the past.';
+        break;
+      case 'select':
+        if (f.options.length && !f.options.some(function (o) { return o.toLowerCase() === n.toLowerCase(); })) return 'Select a valid option.';
+        break;
+    }
+    if (f.pattern) {
+      try { if (!new RegExp(f.pattern).test(n)) return 'The value is not in the required format.'; } catch (e) { /* ignore bad pattern */ }
+    }
+    return '';
+  }
+
+  function refreshFieldState(f, showErrors) {
+    if (!f.editable) return '';
+    var i = f._i;
+    var mod = isModified(f);
+    $('wrap-' + i).classList.toggle('is-modified', mod);
+    show('mod-' + i, mod);
+    var orig = $('orig-' + i);
+    if (mod) {
+      var o = S.original[f.key];
+      orig.innerHTML = '<i class="fa-solid fa-clock-rotate-left me-1"></i>Original: ' + (o ? h(f.type === 'date' ? isoToDisplay(o) : o) : '<em>blank</em>') +
+        ' <button type="button" class="btn btn-link btn-sm p-0 ms-1 align-baseline js-undo" data-i="' + i + '">Undo</button>';
+    }
+    show(orig, mod);
+    var err = validateField(f);
+    if (showErrors) setFieldError(f, err);
+    else if (!err) setFieldError(f, '');
+    return err;
+  }
+
+  function setFieldError(f, msg) {
+    var i = f._i;
+    var input = $('fld-' + i);
+    var el = $('err-' + i);
+    if (el) el.textContent = msg || '';
+    if (input && input.classList) input.classList.toggle('is-invalid', !!msg);
+  }
+
+  function changedFields() { return S.fields.filter(isModified); }
+  function stagedDocs() { return S.docs.filter(function (d) { return !!S.staged[d.key]; }); }
+
+  function updateCounter() {
+    var n = changedFields().length;
+    var d = stagedDocs().length;
+    var parts = [];
+    if (n) parts.push(n + ' field' + (n > 1 ? 's' : '') + ' modified');
+    if (d) parts.push(d + ' document' + (d > 1 ? 's' : '') + ' replaced');
+    $('changeCounter').innerHTML = parts.length ? '<i class="fa-solid fa-pen text-warning me-1"></i>' + h(parts.join(', ')) : 'No changes yet';
+  }
+
+  function onFieldEvent(e) {
+    var el = e.target;
+    if (!el.classList || !el.classList.contains('js-field')) return;
+    var f = S.fields[Number(el.getAttribute('data-i'))];
+    if (!f) return;
+    S.values[f.key] = el.value;
+    refreshFieldState(f, e.type === 'change' || e.type === 'focusout');
+    updateCounter();
+  }
+
+  function undoField(i) {
+    var f = S.fields[i];
+    S.values[f.key] = S.original[f.key];
+    var el = $('fld-' + i);
+    if (el) el.value = S.original[f.key];
+    refreshFieldState(f, true);
+    updateCounter();
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Documents                                                           */
+  /* ------------------------------------------------------------------ */
+  function docIcon(mime, name) {
+    if (/pdf/i.test(mime || '') || /\.pdf$/i.test(name || '')) return 'fa-file-pdf';
+    if (/image/i.test(mime || '') || /\.(jpe?g|png)$/i.test(name || '')) return 'fa-file-image';
+    return 'fa-file';
+  }
+
+  function renderDocuments() {
+    var canEdit = S.app && S.app.canSubmit;
+    $('documentList').innerHTML = S.docs.map(function (d, j) {
+      var staged = S.staged[d.key];
+      var files = d.files.length ? d.files.map(function (f) {
+        return '<div class="d-flex align-items-center justify-content-between gap-2 py-1">' +
+          '<span class="doc-file' + (staged ? ' text-decoration-line-through text-muted' : '') + '"><i class="fa-regular ' + docIcon(f.mimeType, f.name) + ' me-1"></i>' + h(f.name) +
+          (f.size ? ' <span class="text-muted">(' + fmtSize(f.size) + ')</span>' : '') + '</span>' +
+          (f.available ? '<button type="button" class="btn btn-sm btn-outline-primary js-view-doc" data-j="' + j + '" data-src="current" data-idx="' + f.index + '"><i class="fa-solid fa-eye"></i><span class="d-none d-md-inline ms-1">View</span></button>' :
+            '<span class="badge text-bg-warning">Not accessible</span>') +
+          '</div>';
+      }).join('') : '<div class="small text-muted"><i class="fa-regular fa-circle-xmark me-1"></i>' + (d.unrecognised ? 'Existing value is not a valid document link' : 'No document uploaded') + '</div>';
+
+      var stagedHtml = staged ? '<div class="doc-new mt-2"><div class="d-flex justify-content-between align-items-center gap-2">' +
+          '<span><i class="fa-solid fa-circle-check text-success me-1"></i><strong>New:</strong> ' + h(staged.name) + ' <span class="text-muted">(' + fmtSize(staged.size) + ')</span></span>' +
+          '<span class="text-nowrap"><button type="button" class="btn btn-sm btn-outline-success js-view-doc" data-j="' + j + '" data-src="staged"><i class="fa-solid fa-eye"></i></button> ' +
+          '<button type="button" class="btn btn-sm btn-outline-danger js-undo-doc" data-j="' + j + '" title="Keep existing document"><i class="fa-solid fa-xmark"></i></button></span>' +
+        '</div></div>' : '';
+
+      var action = d.editable && canEdit ?
+        '<div class="mt-auto pt-2"><label class="btn btn-sm btn-outline-secondary w-100 mb-0" for="docfile-' + j + '"><i class="fa-solid fa-arrow-up-from-bracket me-1"></i>' +
+        (staged ? 'Choose a different file' : (d.files.length ? 'Replace Document' : 'Upload Document')) + '</label>' +
+        '<input type="file" class="d-none js-doc-input" id="docfile-' + j + '" data-j="' + j + '" accept=".pdf,.jpg,.jpeg,application/pdf,image/jpeg"></div>' :
+        '<div class="mt-auto pt-2 small text-muted"><i class="fa-solid fa-lock me-1"></i>Replacement not permitted</div>';
+
+      return '<div class="col-12 col-md-6 col-xl-4"><div class="doc-card' + (staged ? ' is-modified' : '') + '">' +
+        '<div class="d-flex align-items-start gap-2 mb-2"><span class="doc-icon"><i class="fa-solid fa-file-lines"></i></span>' +
+        '<div class="flex-grow-1"><div class="fw-semibold">' + h(d.label) + (d.required ? '<span class="req">*</span>' : '') +
+        (staged ? ' <span class="badge badge-modified ms-1">Replaced</span>' : '') + '</div>' +
+        (d.help ? '<div class="help-text">' + h(d.help) + '</div>' : '') + '</div></div>' +
+        files + stagedHtml +
+        '<div class="invalid-feedback d-block" id="docerr-' + j + '"></div>' + action +
+        '</div></div>';
+    }).join('');
+  }
+
+  function readAsBase64(file) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () {
+        var res = String(reader.result || '');
+        resolve(res.substring(res.indexOf(',') + 1));
+      };
+      reader.onerror = function () { reject({ message: 'The file could not be read. Please try again.' }); };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function onDocSelected(input) {
+    var j = Number(input.getAttribute('data-j'));
+    var d = S.docs[j];
+    var file = input.files && input.files[0];
+    input.value = '';
+    if (!d || !file) return;
+    var errEl = $('docerr-' + j);
+    errEl.textContent = '';
+    var ext = (file.name.split('.').pop() || '').toLowerCase();
+    var allowed = CFG.allowedExtensions || ['pdf', 'jpg', 'jpeg'];
+    if (allowed.indexOf(ext) === -1) { errEl.textContent = 'Only ' + allowed.join(', ').toUpperCase() + ' files are allowed.'; return; }
+    if (file.size > CFG.maxFileSizeMb * 1024 * 1024) { errEl.textContent = 'File is larger than ' + CFG.maxFileSizeMb + ' MB (' + fmtSize(file.size) + ').'; return; }
+    if (file.size === 0) { errEl.textContent = 'The selected file is empty.'; return; }
+    readAsBase64(file).then(function (b64) {
+      return call('uploadReplacement', [S.token, S.app.applicationNumber, d.key, { fileName: file.name, mimeType: file.type || '', data: b64 }],
+        { loading: 'Uploading ' + file.name + '…' });
+    }).then(function (res) {
+      S.staged[d.key] = { name: res.name, size: res.size, mimeType: res.mimeType };
+      renderDocuments();
+      updateCounter();
+      toast('"' + d.label + '" uploaded. It will replace the existing document when you submit.');
+    }).catch(function (err) {
+      if (err.code !== 'SESSION_EXPIRED') { var el = $('docerr-' + j); if (el) el.textContent = errorMessage(err); }
+    });
+  }
+
+  function undoDoc(j) {
+    var d = S.docs[j];
+    call('removeStagedUpload', [S.token, S.app.applicationNumber, d.key], { loading: 'Removing upload…' }).then(function () {
+      delete S.staged[d.key];
+      renderDocuments();
+      updateCounter();
+    }).catch(function (err) { if (err.code !== 'SESSION_EXPIRED') toast(errorMessage(err), 'danger'); });
+  }
+
+  /* ---------------- Document viewer ---------------- */
+  var pdfJsPromise = null;
+  function loadPdfJs() {
+    if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+    if (pdfJsPromise) return pdfJsPromise;
+    pdfJsPromise = new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = PDFJS_URL;
+      s.onload = function () {
+        if (!window.pdfjsLib) return reject(new Error('pdf.js missing'));
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
+        resolve(window.pdfjsLib);
+      };
+      s.onerror = function () { pdfJsPromise = null; reject(new Error('pdf.js failed to load')); };
+      document.head.appendChild(s);
+    });
+    return pdfJsPromise;
+  }
+
+  function base64ToBytes(b64) {
+    var bin = atob(b64);
+    var bytes = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  }
+
+  function openViewer(doc) {
+    var bytes = base64ToBytes(doc.data);
+    var blob = new Blob([bytes], { type: doc.mimeType });
+    if (S.objectUrl) URL.revokeObjectURL(S.objectUrl);
+    S.objectUrl = URL.createObjectURL(blob);
+    $('docModalTitle').textContent = doc.name;
+    var dl = $('docDownload');
+    dl.href = S.objectUrl;
+    dl.setAttribute('download', doc.name);
+    var body = $('docModalBody');
+    if (/^image\//.test(doc.mimeType)) {
+      body.innerHTML = '<img alt="' + h(doc.name) + '" src="' + S.objectUrl + '">';
+    } else {
+      body.innerHTML = '<div class="text-white p-4"><span class="spinner-border spinner-border-sm me-2"></span>Rendering document…</div>';
+      loadPdfJs().then(function (pdfjsLib) {
+        return pdfjsLib.getDocument({ data: bytes }).promise;
+      }).then(function (pdf) {
+        var wrap = document.createElement('div');
+        wrap.style.cssText = 'width:100%;max-height:75vh;overflow:auto;padding:12px;';
+        body.innerHTML = '';
+        body.appendChild(wrap);
+        var pages = Math.min(pdf.numPages, 30);
+        var chain = Promise.resolve();
+        for (var p = 1; p <= pages; p++) {
+          (function (pageNo) {
+            chain = chain.then(function () { return pdf.getPage(pageNo); }).then(function (page) {
+              var width = Math.min(wrap.clientWidth - 24, 1000) || 800;
+              var viewport = page.getViewport({ scale: 1 });
+              var scale = width / viewport.width * (window.devicePixelRatio || 1);
+              var vp = page.getViewport({ scale: scale });
+              var canvas = document.createElement('canvas');
+              canvas.width = vp.width; canvas.height = vp.height;
+              canvas.style.cssText = 'width:100%;max-width:1000px;display:block;margin:0 auto 12px;background:#fff;box-shadow:0 2px 8px rgba(0,0,0,.3)';
+              wrap.appendChild(canvas);
+              return page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+            });
+          })(p);
+        }
+        return chain.then(function () {
+          if (pdf.numPages > pages) wrap.insertAdjacentHTML('beforeend', '<div class="text-white small text-center">Showing first ' + pages + ' of ' + pdf.numPages + ' pages – download to see all.</div>');
+        });
+      }).catch(function () {
+        body.innerHTML = '<iframe title="' + h(doc.name) + '" src="' + S.objectUrl + '"></iframe>';
+      });
+    }
+    bootstrap.Modal.getOrCreateInstance($('docModal')).show();
+  }
+
+  function viewDoc(j, src, idx) {
+    var d = S.docs[j];
+    call('viewDocument', [S.token, S.app.applicationNumber, d.key, src, idx || 0], { loading: 'Opening document…' })
+      .then(openViewer)
+      .catch(function (err) { if (err.code !== 'SESSION_EXPIRED') toast(errorMessage(err), 'danger'); });
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Preview                                                             */
+  /* ------------------------------------------------------------------ */
+  function validateAll() {
+    var first = null;
+    var count = 0;
+    S.fields.forEach(function (f) {
+      var err = refreshFieldState(f, true);
+      if (err) { count++; if (!first) first = $('fld-' + f._i); }
+    });
+    S.docs.forEach(function (d, j) {
+      var el = $('docerr-' + j);
+      if (d.required && d.editable && !d.files.length && !S.staged[d.key]) {
+        el.textContent = 'This document is mandatory. Please upload it.';
+        count++;
+        if (!first) first = el;
+      } else if (el) {
+        el.textContent = '';
+      }
+    });
+    if (first) {
+      first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (first.focus) setTimeout(function () { first.focus(); }, 300);
+    }
+    return count;
+  }
+
+  function displayValue(f, v) {
+    if (!v) return '';
+    return f.type === 'date' ? isoToDisplay(v) : v;
+  }
+
+  function goPreview() {
+    var errors = validateAll();
+    if (errors) {
+      toast('Please correct ' + errors + ' highlighted field' + (errors > 1 ? 's' : '') + '.', 'danger');
+      return;
+    }
+    var app = S.app;
+    $('previewAppNo').textContent = app.applicationNumber;
+    $('previewAppName').textContent = app.applicantName || '';
+    var changed = changedFields();
+    var docs = stagedDocs();
+
+    if (!changed.length && !docs.length) {
+      $('previewSummary').innerHTML = '<div class="alert alert-warning mb-0"><i class="fa-solid fa-circle-info me-1"></i>You have not made any changes. Go back and edit the fields or documents you want to correct.</div>';
+    } else {
+      $('previewSummary').innerHTML = '<div class="alert alert-info mb-0"><i class="fa-solid fa-list-check me-1"></i><strong>' +
+        changed.length + ' field(s) modified, ' + docs.length + ' document(s) replaced.</strong> Modified items are highlighted below with the original and corrected value.' +
+        '<div class="small mt-1">' + changed.map(function (f) { return h(f.label); }).concat(docs.map(function (d) { return h(d.label) + ' (document)'; })).join(' &middot; ') + '</div></div>';
+    }
+
+    var html = app.sections.map(function (sec) {
+      var rows = sec.fields.map(function (f) {
+        var cur = displayValue(f, S.values[f.key]);
+        if (isModified(f)) {
+          var orig = displayValue(f, S.original[f.key]);
+          return '<tr class="is-modified"><th scope="row">' + h(f.label) + ' <span class="badge badge-modified">Modified</span></th><td>' +
+            '<div class="old-val">' + (orig ? h(orig) : '<em>blank</em>') + '</div>' +
+            '<div class="new-val"><i class="fa-solid fa-arrow-right-long me-1"></i>' + (cur ? h(cur) : '<em>blank</em>') + '</div></td></tr>';
+        }
+        return '<tr><th scope="row">' + h(f.label) + '</th><td>' + (cur ? h(cur) : '<span class="text-muted">—</span>') + '</td></tr>';
+      }).join('');
+      return '<div class="portal-card"><div class="card-header d-flex align-items-center"><span class="section-icon"><i class="fa-solid ' + h(sec.icon) + '"></i></span>' + h(sec.name) + '</div>' +
+        '<div class="table-responsive"><table class="table preview-table mb-0"><tbody>' + rows + '</tbody></table></div></div>';
+    }).join('');
+
+    if (S.docs.length) {
+      var docRows = S.docs.map(function (d, j) {
+        var existing = d.files.length ? d.files.map(function (f) {
+          return h(f.name) + (f.available ? ' <button type="button" class="btn btn-link btn-sm p-0 js-view-doc" data-j="' + j + '" data-src="current" data-idx="' + f.index + '">view</button>' : '');
+        }).join('<br>') : '<em>none</em>';
+        var staged = S.staged[d.key];
+        if (staged) {
+          return '<tr class="is-modified"><th scope="row">' + h(d.label) + ' <span class="badge badge-modified">Replaced</span></th><td>' +
+            '<div class="old-val">' + existing + '</div>' +
+            '<div class="new-val"><i class="fa-solid fa-arrow-right-long me-1"></i>' + h(staged.name) + ' (' + fmtSize(staged.size) + ') ' +
+            '<button type="button" class="btn btn-link btn-sm p-0 js-view-doc" data-j="' + j + '" data-src="staged">view</button></div>' +
+            '<div class="small text-muted">The previous document will be archived, not deleted.</div></td></tr>';
+        }
+        return '<tr><th scope="row">' + h(d.label) + '</th><td>' + existing + ' <span class="badge text-bg-light border">Existing</span></td></tr>';
+      }).join('');
+      html += '<div class="portal-card"><div class="card-header d-flex align-items-center"><span class="section-icon"><i class="fa-solid fa-folder-open"></i></span>' + h(app.documentSectionName || 'Uploaded Documents') + '</div>' +
+        '<div class="table-responsive"><table class="table preview-table mb-0"><tbody>' + docRows + '</tbody></table></div></div>';
+    }
+    $('previewSections').innerHTML = html;
+    $('declaration').checked = false;
+    $('declarationError').textContent = '';
+    $('btnConfirmSubmit').disabled = !changed.length && !docs.length;
+    showView('preview');
+  }
+
+  function openConfirm() {
+    if (!$('declaration').checked) {
+      $('declarationError').textContent = 'Please accept the declaration to continue.';
+      $('declaration').focus();
+      return;
+    }
+    $('declarationError').textContent = '';
+    var changed = changedFields();
+    var docs = stagedDocs();
+    $('confirmAppNo').textContent = S.app.applicationNumber;
+    $('confirmSummary').innerHTML = '<li>' + changed.length + ' field(s) will be updated</li><li>' + docs.length + ' document(s) will be replaced</li>';
+    setStep(5);
+    bootstrap.Modal.getOrCreateInstance($('confirmModal')).show();
+  }
+
+  function submitFinal() {
+    bootstrap.Modal.getOrCreateInstance($('confirmModal')).hide();
+    var changes = {};
+    changedFields().forEach(function (f) { changes[f.key] = String(S.values[f.key] === undefined ? '' : S.values[f.key]); });
+    var payload = {
+      version: S.app.version,
+      changes: changes,
+      replacedDocuments: stagedDocs().map(function (d) { return d.key; }),
+      declaration: true
+    };
+    $('btnFinalSubmit').disabled = true;
+    call('submitCorrection', [S.token, S.app.applicationNumber, payload], { loading: 'Submitting your corrections… Please do not close this page.' })
+      .then(function (res) {
+        S.original = {}; S.values = {}; S.staged = {}; S.fields = []; S.docs = [];
+        $('confirmTxnId').textContent = res.transactionId;
+        $('confirmAppNumber').textContent = res.applicationNumber;
+        $('confirmTime').textContent = res.submittedAt;
+        $('confirmStatus').innerHTML = statusBadge(res.status);
+        $('confirmFields').textContent = res.fieldsChanged.length ? res.fieldsChanged.join(', ') : 'None';
+        $('confirmDocs').textContent = res.documentsReplaced.length ? res.documentsReplaced.join(', ') : 'None';
+        show('btnOtherApps', S.applications.length > 1);
+        showView('confirm');
+      })
+      .catch(function (err) {
+        if (err.code === 'SESSION_EXPIRED') return;
+        setStep(4);
+        if (err.code === 'VALIDATION' && err.details && err.details.fieldErrors) {
+          showView('edit');
+          var fe = err.details.fieldErrors;
+          S.fields.forEach(function (f) { if (fe[f.key]) setFieldError(f, fe[f.key]); });
+          S.docs.forEach(function (d, j) { if (fe[d.key]) $('docerr-' + j).textContent = fe[d.key]; });
+          alertBox('danger', err.message);
+        } else if (err.code === 'CONFLICT') {
+          alertBox('warning', err.message);
+        } else {
+          alertBox('danger', errorMessage(err));
+        }
+      })
+      .finally(function () { $('btnFinalSubmit').disabled = false; });
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Session handling                                                    */
+  /* ------------------------------------------------------------------ */
+  function hasUnsavedWork() { return !!S.token && (changedFields().length > 0 || stagedDocs().length > 0); }
+
+  function resetState() {
+    S.token = null; S.app = null; S.fields = []; S.docs = []; S.original = {}; S.values = {}; S.staged = {}; S.applications = [];
+    S.warned = false;
+    storage('del');
+    bootstrap.Modal.getOrCreateInstance($('sessionModal')).hide();
+  }
+
+  function sessionExpired(message) {
+    resetState();
+    showView('login');
+    $('loginError').textContent = message || 'Your session has expired. Please log in again.';
+    show('loginError', true);
+  }
+
+  function doLogout() {
+    if (hasUnsavedWork() && !window.confirm('You have unsaved corrections. Logout anyway? Your changes will be lost.')) return;
+    var token = S.token;
+    resetState();
+    showView('login');
+    if (token) server('logout', [token]).catch(function () { /* ignore */ });
+    toast('You have been logged out.', 'secondary');
+  }
+
+  function keepAlive(silent) {
+    if (!S.token) return Promise.resolve();
+    S.lastKeepAlive = Date.now();
+    return call('keepAlive', [S.token], { silent: silent !== false }).then(function () {
+      S.warned = false;
+      bootstrap.Modal.getOrCreateInstance($('sessionModal')).hide();
+    }).catch(function () { /* sessionExpired handled in call() */ });
+  }
+
+  function tick() {
+    if (!S.token) return;
+    var remaining = Math.round(S.idleSeconds - (Date.now() - S.lastContact) / 1000);
+    if (remaining <= 0) { sessionExpired(); return; }
+    var mm = Math.floor(remaining / 60), ss = remaining % 60;
+    var text = mm + ':' + (ss < 10 ? '0' : '') + ss;
+    $('sessionTimerText').textContent = text;
+    $('sessionTimer').classList.toggle('warn', remaining <= 120);
+    if (remaining <= 120) {
+      $('sessionModalCountdown').textContent = text;
+      if (!S.warned) { S.warned = true; bootstrap.Modal.getOrCreateInstance($('sessionModal')).show(); }
+    }
+  }
+
+  function onActivity() {
+    // Keep the server session alive while the applicant is actively working.
+    if (!S.token || S.warned || S.busy) return;
+    if (Date.now() - S.lastContact > 120000 && Date.now() - S.lastKeepAlive > 60000) keepAlive(true);
+  }
+
+  function resume() {
+    var token = storage('get');
+    if (!token) { showView('login'); return; }
+    S.token = token;
+    call('getMyApplications', [token], { loading: 'Restoring your session…' }).then(function (data) {
+      S.idleSeconds = data.idleTimeoutSeconds || S.idleSeconds;
+      S.masked = data.maskedIdentifier;
+      handleApplicationList(data.applications, false);
+    }).catch(function () {
+      resetState();
+      showView('login');
+    });
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Wiring                                                              */
+  /* ------------------------------------------------------------------ */
+  document.addEventListener('DOMContentLoaded', function () {
+    initLogin();
+
+    $('applicationList').addEventListener('click', function (e) {
+      var btn = e.target.closest('.js-open-app');
+      if (btn) openApplication(btn.getAttribute('data-app'));
+    });
+
+    var form = $('formSections');
+    form.addEventListener('input', onFieldEvent);
+    form.addEventListener('change', onFieldEvent);
+    form.addEventListener('focusout', onFieldEvent);
+    form.addEventListener('click', function (e) {
+      var u = e.target.closest('.js-undo');
+      if (u) undoField(Number(u.getAttribute('data-i')));
+    });
+    $('applicationForm').addEventListener('submit', function (e) { e.preventDefault(); });
+
+    $('documentList').addEventListener('change', function (e) {
+      if (e.target.classList.contains('js-doc-input')) onDocSelected(e.target);
+    });
+    document.addEventListener('click', function (e) {
+      var v = e.target.closest('.js-view-doc');
+      if (v) { viewDoc(Number(v.getAttribute('data-j')), v.getAttribute('data-src'), Number(v.getAttribute('data-idx') || 0)); return; }
+      var u = e.target.closest('.js-undo-doc');
+      if (u) undoDoc(Number(u.getAttribute('data-j')));
+    });
+
+    $('btnPreview').addEventListener('click', goPreview);
+    $('btnResetAll').addEventListener('click', function () {
+      if (!changedFields().length) return;
+      if (!window.confirm('Undo all field changes? (Uploaded replacement documents are kept.)')) return;
+      S.fields.forEach(function (f) { if (isModified(f)) undoField(f._i); });
+    });
+    $('btnBackToList').addEventListener('click', function () {
+      if (hasUnsavedWork() && !window.confirm('Leave this application? Unsubmitted changes will be lost.')) return;
+      renderApplicationList();
+      showView('select');
+    });
+    $('btnBackToEdit').addEventListener('click', function () { showView('edit'); });
+    $('btnConfirmSubmit').addEventListener('click', openConfirm);
+    $('btnFinalSubmit').addEventListener('click', submitFinal);
+    $('confirmModal').addEventListener('hidden.bs.modal', function () {
+      if (!$('view-preview').classList.contains('d-none')) setStep(4);
+    });
+    $('btnPrint').addEventListener('click', function () { window.print(); });
+    $('btnDoneLogout').addEventListener('click', doLogout);
+    $('btnLogout').addEventListener('click', doLogout);
+    $('btnOtherApps').addEventListener('click', function () {
+      call('getMyApplications', [S.token], { loading: 'Loading your applications…' }).then(function (data) {
+        S.applications = data.applications;
+        renderApplicationList();
+        showView('select');
+      }).catch(function (err) { if (err.code !== 'SESSION_EXPIRED') alertBox('danger', errorMessage(err)); });
+    });
+    $('btnStaySignedIn').addEventListener('click', function () { keepAlive(false); });
+    $('docModal').addEventListener('hidden.bs.modal', function () {
+      $('docModalBody').innerHTML = '';
+      if (S.objectUrl) { URL.revokeObjectURL(S.objectUrl); S.objectUrl = null; }
+    });
+
+    ['keydown', 'click', 'touchstart', 'input'].forEach(function (ev) { document.addEventListener(ev, onActivity, { passive: true }); });
+    window.addEventListener('beforeunload', function (e) {
+      if (hasUnsavedWork()) { e.preventDefault(); e.returnValue = ''; }
+    });
+
+    setInterval(tick, 1000);
+    resume();
+  });
+})();
+</script>

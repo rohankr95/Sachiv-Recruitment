@@ -1,0 +1,63 @@
+<!-- Step 4: Preview  /  Step 6: Confirmation -->
+<section id="view-preview" class="view d-none" aria-labelledby="previewTitle">
+  <div class="app-banner mb-3">
+    <div class="d-flex flex-wrap justify-content-between gap-2 align-items-center">
+      <div>
+        <div class="meta-label">Application Number</div>
+        <div class="app-number" id="previewAppNo"></div>
+      </div>
+      <div class="text-md-end">
+        <div class="meta-label">Applicant</div>
+        <div class="fw-semibold" id="previewAppName"></div>
+      </div>
+    </div>
+  </div>
+
+  <h2 id="previewTitle" class="h4 mb-2">Preview Your Corrections</h2>
+  <div id="previewSummary" class="mb-3"></div>
+
+  <div id="previewSections" class="d-grid gap-3"></div>
+
+  <div class="portal-card p-3 mt-3">
+    <div class="form-check">
+      <input class="form-check-input" type="checkbox" id="declaration">
+      <label class="form-check-label" for="declaration">
+        I declare that the information and documents provided are true and correct to the best of my knowledge. I understand that providing false information may lead to rejection of my application.
+      </label>
+    </div>
+    <div class="invalid-feedback d-block" id="declarationError"></div>
+  </div>
+
+  <div class="action-bar">
+    <div class="container d-flex flex-wrap justify-content-between gap-2">
+      <button type="button" class="btn btn-outline-secondary" id="btnBackToEdit"><i class="fa-solid fa-pen-to-square me-1"></i>Go Back and Edit</button>
+      <button type="button" class="btn btn-success" id="btnConfirmSubmit"><i class="fa-solid fa-circle-check me-1"></i>Confirm and Submit</button>
+    </div>
+  </div>
+</section>
+
+<section id="view-confirm" class="view d-none" aria-labelledby="confirmTitle">
+  <div class="portal-card p-4 p-md-5 mx-auto text-center" style="max-width:640px">
+    <div class="success-icon"><i class="fa-solid fa-check"></i></div>
+    <h2 id="confirmTitle" class="h4">Corrections Submitted Successfully</h2>
+    <p class="text-muted">Your application has been updated. Please note your correction transaction ID for future reference.</p>
+    <div class="mb-3">
+      <div class="meta-label mb-1">Correction Transaction ID</div>
+      <span class="txn-id" id="confirmTxnId"></span>
+    </div>
+    <table class="table table-sm text-start small mb-4">
+      <tbody>
+        <tr><th scope="row" class="w-50">Application Number</th><td id="confirmAppNumber" class="fw-semibold"></td></tr>
+        <tr><th scope="row">Submitted on</th><td id="confirmTime"></td></tr>
+        <tr><th scope="row">Status</th><td id="confirmStatus"></td></tr>
+        <tr><th scope="row">Fields corrected</th><td id="confirmFields"></td></tr>
+        <tr><th scope="row">Documents replaced</th><td id="confirmDocs"></td></tr>
+      </tbody>
+    </table>
+    <div class="d-flex flex-wrap justify-content-center gap-2 no-print">
+      <button type="button" class="btn btn-outline-primary" id="btnPrint"><i class="fa-solid fa-print me-1"></i>Print Acknowledgement</button>
+      <button type="button" class="btn btn-outline-secondary d-none" id="btnOtherApps"><i class="fa-solid fa-list me-1"></i>My Applications</button>
+      <button type="button" class="btn btn-primary" id="btnDoneLogout"><i class="fa-solid fa-right-from-bracket me-1"></i>Logout</button>
+    </div>
+  </div>
+</section>

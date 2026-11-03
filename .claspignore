@@ -1,0 +1,3 @@
+local-test/**
+README.md
+**/*.md

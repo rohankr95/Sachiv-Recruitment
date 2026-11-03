@@ -1,0 +1,58 @@
+<!-- Step 1: Login  /  Step 2: Verify Application (application list) -->
+<section id="view-login" class="view" aria-labelledby="loginTitle">
+  <div class="portal-card login-card p-4 p-md-5">
+    <div class="text-center mb-4">
+      <div class="login-illustration"><i class="fa-solid fa-user-shield"></i></div>
+      <h2 id="loginTitle" class="h4 mb-1">Applicant Login</h2>
+      <p class="text-muted small mb-0">Use the email address or mobile number you gave in your original application, together with your date of birth.</p>
+    </div>
+
+    <div id="portalClosedNotice" class="alert alert-warning small d-none"></div>
+    <div id="loginError" class="alert alert-danger small d-none" role="alert"></div>
+
+    <form id="loginForm" novalidate autocomplete="off">
+      <div class="mb-3">
+        <label for="loginIdentifier" class="form-label">Registered Email Address or Mobile Number <span class="req">*</span></label>
+        <div class="input-group">
+          <span class="input-group-text"><i class="fa-solid fa-at" id="identifierIcon"></i></span>
+          <input type="text" class="form-control" id="loginIdentifier" maxlength="254" required
+                 placeholder="Email or 10-digit mobile" autocomplete="username" spellcheck="false" autocapitalize="off">
+        </div>
+        <div class="invalid-feedback d-block" id="loginIdentifierError"></div>
+      </div>
+      <div class="mb-4">
+        <label for="loginDob" class="form-label">Date of Birth <span class="req">*</span></label>
+        <div class="input-group">
+          <span class="input-group-text"><i class="fa-regular fa-calendar"></i></span>
+          <input type="date" class="form-control" id="loginDob" required min="1900-01-01">
+        </div>
+        <div class="invalid-feedback d-block" id="loginDobError"></div>
+      </div>
+      <button type="submit" class="btn btn-primary w-100 py-2" id="btnLogin">
+        <i class="fa-solid fa-right-to-bracket me-1"></i>Login &amp; Retrieve Application
+      </button>
+    </form>
+
+    <hr class="my-4">
+    <ul class="small text-muted mb-0 ps-3">
+      <li>Your session ends automatically after a period of inactivity.</li>
+      <li>Repeated wrong attempts will temporarily lock login for that email/mobile.</li>
+      <li>Never share your login details with anyone.</li>
+    </ul>
+  </div>
+</section>
+
+<section id="view-select" class="view d-none" aria-labelledby="selectTitle">
+  <div class="d-flex flex-wrap justify-content-between align-items-end gap-2 mb-3">
+    <div>
+      <h2 id="selectTitle" class="h4 mb-1">Your Applications</h2>
+      <div class="text-muted small">Logged in with <strong id="loggedInAs"></strong></div>
+    </div>
+  </div>
+  <div id="duplicateNotice" class="alert alert-warning d-none">
+    <i class="fa-solid fa-clone me-1"></i>
+    <strong>Duplicate registration detected.</strong>
+    More than one application is registered with the same email address or mobile number. All applications that match your details are listed below and marked <span class="badge badge-duplicate">Duplicate</span>. Open and verify each one separately.
+  </div>
+  <div id="applicationList" class="d-grid gap-3"></div>
+</section>

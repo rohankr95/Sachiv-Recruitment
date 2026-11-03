@@ -1,0 +1,327 @@
+<script>
+/** AdminJavaScript.html – administrative dashboard front end. */
+(function () {
+  'use strict';
+  var CFG = window.PORTAL_CONFIG || {};
+  var TOKEN_KEY = 'acp_admin_token';
+  var PDFJS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+  var PDFJS_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  var A = { token: null, user: '', idleSeconds: CFG.idleTimeoutSeconds || 1800, lastContact: Date.now(), lastKeepAlive: 0, warned: false, busy: 0, current: null, objectUrl: null, duplicatesLoaded: false };
+
+  function $(id) { return document.getElementById(id); }
+  function h(v) {
+    return String(v === null || v === undefined ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/`/g, '&#96;');
+  }
+  function show(el, on) { (typeof el === 'string' ? $(el) : el).classList.toggle('d-none', !on); }
+  function storage(a, v) { try { if (a === 'get') return sessionStorage.getItem(TOKEN_KEY); if (a === 'set') sessionStorage.setItem(TOKEN_KEY, v); if (a === 'del') sessionStorage.removeItem(TOKEN_KEY); } catch (e) { } return null; }
+  function statusBadge(s) {
+    var c = 'bg-secondary';
+    if (s === 'Modified') c = 'bg-info text-dark'; else if (s === 'Pending Approval') c = 'bg-warning text-dark';
+    else if (s === 'Approved') c = 'bg-success'; else if (s === 'Rejected') c = 'bg-danger';
+    return '<span class="badge ' + c + '">' + h(s || 'Not corrected') + '</span>';
+  }
+  function linkify(text) {
+    // Escapes first, then turns Drive URLs into links.
+    return h(text).replace(/(https:\/\/(?:drive|docs)\.google\.com\/[^\s"&<]+(?:&amp;[^\s"&<]+)*)/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
+  }
+
+  function server(fn, args) {
+    return new Promise(function (resolve, reject) {
+      var r = google.script.run
+        .withSuccessHandler(function (res) { if (!res) return reject({ message: 'Empty response.' }); if (res.ok) resolve(res.data); else reject(res); })
+        .withFailureHandler(function (err) { reject({ code: 'NETWORK', message: 'Could not reach the server.' + (err && err.message ? ' (' + err.message + ')' : '') }); });
+      r[fn].apply(r, args || []);
+    });
+  }
+  function call(fn, args, opts) {
+    opts = opts || {};
+    if (!opts.silent) { A.busy++; $('loaderText').textContent = opts.loading || 'Please wait…'; show('loader', true); }
+    return server(fn, args).then(function (d) { A.lastContact = Date.now(); return d; })
+      .catch(function (err) { if (err && err.code === 'SESSION_EXPIRED' && fn !== 'adminLogin') expired(err.message); throw err; })
+      .finally(function () { if (!opts.silent) { A.busy = Math.max(0, A.busy - 1); if (!A.busy) show('loader', false); } });
+  }
+  function alertBox(type, msg) {
+    var el = $('globalAlert');
+    if (!msg) { show(el, false); return; }
+    el.className = 'alert alert-' + type; el.textContent = msg; show(el, true);
+  }
+  function toast(msg, type) {
+    var id = 't' + Date.now();
+    $('toastArea').insertAdjacentHTML('beforeend', '<div id="' + id + '" class="toast text-bg-' + (type || 'success') + ' border-0" role="status"><div class="d-flex"><div class="toast-body">' + h(msg) + '</div><button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button></div></div>');
+    new bootstrap.Toast($(id), { delay: 4000 }).show();
+  }
+  function errMsg(e) { return (e && e.message) || 'Something went wrong.'; }
+
+  function showView(name) {
+    ['login', 'dashboard', 'detail'].forEach(function (v) { show('view-' + v, v === name); });
+    alertBox(null, '');
+    show('btnLogout', !!A.token);
+    show('sessionTimer', !!A.token);
+    $('adminUser').textContent = A.token ? 'Signed in as ' + A.user : '';
+    tick();
+    window.scrollTo({ top: 0 });
+  }
+
+  /* ---------------- Login ---------------- */
+  function doLogin(e) {
+    e.preventDefault();
+    show('loginError', false);
+    var u = $('adminUsername').value.trim(), p = $('adminPassword').value;
+    if (!u || !p) { $('loginError').textContent = 'Enter your username and password.'; show('loginError', true); return; }
+    $('btnLogin').disabled = true;
+    call('adminLogin', [u, p], { loading: 'Signing in…' }).then(function (d) {
+      A.token = d.token; A.user = d.username; A.idleSeconds = d.idleTimeoutSeconds; A.lastContact = Date.now();
+      storage('set', A.token);
+      try { sessionStorage.setItem(TOKEN_KEY + '_u', A.user); } catch (x) { }
+      $('loginForm').reset();
+      loadDashboard();
+    }).catch(function (err) {
+      $('loginError').textContent = errMsg(err); show('loginError', true);
+    }).finally(function () { $('btnLogin').disabled = false; });
+  }
+
+  function expired(msg) {
+    A.token = null; storage('del'); A.warned = false;
+    bootstrap.Modal.getOrCreateInstance($('sessionModal')).hide();
+    showView('login');
+    $('loginError').textContent = msg || 'Session expired. Please log in again.'; show('loginError', true);
+  }
+
+  function logout() {
+    var t = A.token; A.token = null; storage('del');
+    showView('login');
+    if (t) server('adminLogout', [t]).catch(function () { });
+  }
+
+  /* ---------------- Dashboard ---------------- */
+  function statCard(icon, label, value, sub) {
+    return '<div class="col-6 col-md-4 col-xl-2"><div class="stat-card"><div class="d-flex justify-content-between align-items-start mb-2"><div class="stat-icon"><i class="fa-solid ' + icon + '"></i></div></div>' +
+      '<div class="stat-value">' + h(value) + '</div><div class="stat-label">' + h(label) + '</div>' + (sub ? '<div class="small text-muted mt-1">' + h(sub) + '</div>' : '') + '</div></div>';
+  }
+
+  function loadDashboard() {
+    call('adminGetDashboard', [A.token], { loading: 'Loading dashboard…' }).then(function (d) {
+      var s = d.stats;
+      $('statCards').innerHTML =
+        statCard('fa-file-lines', 'Total Applications', s.totalApplications) +
+        statCard('fa-pen-to-square', 'Applications Corrected', s.applicationsCorrected, s.totalApplications ? Math.round(s.applicationsCorrected * 100 / s.totalApplications) + '% of total' : '') +
+        statCard('fa-hourglass-half', 'Pending Corrections', d.approvalEnabled ? s.pendingCorrections : '—', d.approvalEnabled ? (s.approved + ' approved, ' + s.rejected + ' rejected') : 'Approval workflow disabled') +
+        statCard('fa-file-arrow-up', 'Documents Replaced', s.documentsReplaced) +
+        statCard('fa-receipt', 'Correction Transactions', s.totalTransactions, s.fieldChanges + ' field changes') +
+        statCard('fa-clone', 'Duplicate Email Groups', s.duplicateEmailGroups, s.duplicateEmailRecords + ' applications involved');
+      $('portalState').innerHTML = (d.portalOpen ? '<span class="badge bg-success">Portal open for corrections</span>' : '<span class="badge bg-danger">Portal closed for corrections</span>') +
+        (d.approvalEnabled ? ' <span class="badge bg-warning text-dark">Approval required</span>' : '');
+      $('recentTable').innerHTML = d.recent.length ? '<table class="table table-hover admin-table mb-0"><thead><tr><th>Transaction ID</th><th>Application No.</th><th>Date &amp; Time</th><th>Fields</th><th>Status</th></tr></thead><tbody>' +
+        d.recent.map(function (r) {
+          return '<tr class="clickable js-open-app" data-app="' + h(r.applicationNumber) + '"><td class="font-monospace small">' + h(r.transactionId) + '</td><td class="fw-semibold text-primary">' + h(r.applicationNumber) + '</td><td>' + h(r.time) + '</td><td>' + h(r.fields) + '</td><td>' + statusBadge(r.status) + '</td></tr>';
+        }).join('') + '</tbody></table>' : '<div class="p-3 text-muted small">No corrections yet.</div>';
+      showView('dashboard');
+    }).catch(function (err) { if (err.code !== 'SESSION_EXPIRED') { showView('dashboard'); alertBox('danger', errMsg(err)); } });
+  }
+
+  function doSearch(e) {
+    e.preventDefault();
+    var q = $('searchInput').value.trim();
+    if (!q) return;
+    call('adminSearch', [A.token, q], { loading: 'Searching…' }).then(function (d) {
+      if (!d.results.length) { $('searchResults').innerHTML = '<div class="alert alert-light border small mb-0">No application found for "' + h(q) + '".</div>'; return; }
+      if (d.results.length === 1 && d.matchedBy === 'Application Number') { openApp(d.results[0].applicationNumber); return; }
+      $('searchResults').innerHTML = '<div class="small text-muted mb-2">' + d.results.length + ' result(s) matched by ' + h(d.matchedBy) + (d.results.length > 1 ? ' <span class="badge badge-duplicate">Duplicate</span>' : '') + '</div>' +
+        '<div class="list-group">' + d.results.map(function (r) {
+          return '<button type="button" class="list-group-item list-group-item-action js-open-app d-flex justify-content-between align-items-center" data-app="' + h(r.applicationNumber) + '"><span><strong class="text-primary">' + h(r.applicationNumber) + '</strong> &middot; ' + h(r.applicantName) + '</span><span>' + statusBadge(r.status) + ' <span class="badge text-bg-light border">' + h(r.correctionCount) + '</span></span></button>';
+        }).join('') + '</div>';
+    }).catch(function (err) { if (err.code !== 'SESSION_EXPIRED') $('searchResults').innerHTML = '<div class="alert alert-danger small mb-0">' + h(errMsg(err)) + '</div>'; });
+  }
+
+  function loadDuplicates() {
+    if (A.duplicatesLoaded) return;
+    call('adminGetDuplicates', [A.token], { loading: 'Finding duplicates…' }).then(function (d) {
+      A.duplicatesLoaded = true;
+      var block = function (title, groups) {
+        if (!groups.length) return '<div class="portal-card p-3 mb-3"><strong>' + h(title) + '</strong><div class="small text-muted">None found.</div></div>';
+        return '<div class="portal-card mb-3"><div class="card-header">' + h(title) + ' <span class="badge bg-secondary">' + groups.length + ' groups</span></div><div class="table-responsive"><table class="table admin-table mb-0"><thead><tr><th>' + h(groups[0].type) + '</th><th>Applications</th><th>Note</th></tr></thead><tbody>' +
+          groups.map(function (g) {
+            return '<tr><td class="text-break">' + h(g.value) + '</td><td>' + g.applications.map(function (a) {
+              return '<a href="#" class="js-open-app" data-app="' + h(a.applicationNumber) + '">' + h(a.applicationNumber) + '</a> <span class="text-muted small">' + h(a.applicantName) + ' · DOB ' + h(a.dob) + '</span>';
+            }).join('<br>') + '</td><td>' + (g.differentPersons ? '<span class="badge bg-danger">Different DOBs – likely different persons</span>' : '<span class="badge bg-info text-dark">Same DOB – likely same person</span>') + '</td></tr>';
+          }).join('') + '</tbody></table></div></div>';
+      };
+      $('duplicatesArea').innerHTML = (d.duplicateApplicationNumbers.length ? '<div class="alert alert-danger">Duplicate application numbers (corrections blocked): ' + d.duplicateApplicationNumbers.map(h).join(', ') + '</div>' : '') +
+        block('Shared email addresses', d.email) + block('Shared mobile numbers', d.mobile);
+    }).catch(function (err) { if (err.code !== 'SESSION_EXPIRED') $('duplicatesArea').innerHTML = '<div class="alert alert-danger">' + h(errMsg(err)) + '</div>'; });
+  }
+
+  /* ---------------- Application detail ---------------- */
+  function openApp(appNo) {
+    call('adminGetApplication', [A.token, appNo], { loading: 'Loading application…' }).then(function (d) {
+      A.current = d;
+      renderDetail(d);
+      showView('detail');
+    }).catch(function (err) { if (err.code !== 'SESSION_EXPIRED') alertBox('danger', errMsg(err)); });
+  }
+
+  function renderDetail(d) {
+    var dupLinks = function (list) { return list.map(function (a) { return '<a href="#" class="js-open-app" data-app="' + h(a) + '">' + h(a) + '</a>'; }).join(', '); };
+    $('detailBanner').innerHTML = '<div class="row g-3 align-items-center">' +
+      '<div class="col-12 col-md-4"><div class="meta-label">Application Number</div><div class="app-number">' + h(d.applicationNumber) + '</div></div>' +
+      '<div class="col-6 col-md-2"><div class="meta-label">Applicant</div><div class="fw-semibold">' + h(d.applicantName) + '</div></div>' +
+      '<div class="col-6 col-md-2"><div class="meta-label">Status</div>' + statusBadge(d.status) + '</div>' +
+      '<div class="col-6 col-md-2"><div class="meta-label">Corrections</div><div class="fw-semibold">' + h(d.correctionCount) + '</div></div>' +
+      '<div class="col-6 col-md-2"><div class="meta-label">Last modified</div><div class="small">' + h(d.lastModified || '—') + '</div></div></div>' +
+      (d.modifiedFields.length ? '<div class="mt-2 small"><strong>Modified fields:</strong> ' + d.modifiedFields.map(function (f) { return '<span class="badge badge-modified me-1">' + h(f) + '</span>'; }).join('') + '</div>' : '') +
+      (d.duplicates.email.length ? '<div class="mt-2 small"><span class="badge badge-duplicate">Duplicate email</span> also used by ' + dupLinks(d.duplicates.email) + '</div>' : '') +
+      (d.duplicates.mobile.length ? '<div class="mt-1 small"><span class="badge badge-duplicate">Duplicate mobile</span> also used by ' + dupLinks(d.duplicates.mobile) + '</div>' : '');
+
+    $('detailDecision').innerHTML = d.canDecide ? '<div class="portal-card p-3 border-warning"><div class="fw-semibold mb-2"><i class="fa-solid fa-gavel me-1"></i>Decision for correction ' + h(d.lastTransactionId) + '</div>' +
+      '<div class="row g-2"><div class="col-12 col-md"><input type="text" class="form-control form-control-sm" id="decisionRemark" maxlength="300" placeholder="Remark (optional)"></div>' +
+      '<div class="col-auto"><button class="btn btn-sm btn-success" id="btnApprove"><i class="fa-solid fa-check me-1"></i>Approve</button></div>' +
+      '<div class="col-auto"><button class="btn btn-sm btn-danger" id="btnReject"><i class="fa-solid fa-xmark me-1"></i>Reject &amp; revert</button></div></div></div>' : '';
+
+    $('detailSections').innerHTML = d.sections.map(function (sec) {
+      return '<div class="portal-card"><div class="card-header d-flex align-items-center"><span class="section-icon"><i class="fa-solid ' + h(sec.icon) + '"></i></span>' + h(sec.name) + '</div>' +
+        '<div class="table-responsive"><table class="table admin-table preview-table mb-0"><tbody>' + sec.fields.map(function (f) {
+          return '<tr class="' + (f.timesModified ? 'is-modified' : '') + '"><th scope="row">' + h(f.label) + (f.editable ? '' : ' <i class="fa-solid fa-lock text-muted small" title="Not editable by applicants"></i>') +
+            (f.timesModified ? ' <span class="badge badge-modified">Modified ×' + f.timesModified + '</span>' : '') + '</th><td class="text-break">' + (f.value ? h(f.value) : '<span class="text-muted">—</span>') + '</td></tr>';
+        }).join('') + '</tbody></table></div></div>';
+    }).join('');
+
+    $('detailDocs').innerHTML = d.documents.length ? '<div class="row g-3">' + d.documents.map(function (doc) {
+      return '<div class="col-12 col-md-6 col-xl-4"><div class="doc-card' + (doc.timesReplaced ? ' is-modified' : '') + '"><div class="fw-semibold mb-2">' + h(doc.label) +
+        (doc.timesReplaced ? ' <span class="badge badge-modified">Replaced ×' + doc.timesReplaced + '</span>' : '') + '</div>' +
+        (doc.files.length ? doc.files.map(function (f) {
+          return '<div class="d-flex justify-content-between align-items-center gap-2 py-1"><span class="doc-file">' + h(f.name) + '</span><span class="text-nowrap">' +
+            (f.available ? '<button class="btn btn-sm btn-outline-primary js-view-file" data-id="' + h(f.id) + '"><i class="fa-solid fa-eye"></i></button> ' : '<span class="badge bg-warning text-dark">Not accessible</span> ') +
+            '<a class="btn btn-sm btn-outline-secondary" href="' + h(f.url) + '" target="_blank" rel="noopener noreferrer" title="Open in Google Drive"><i class="fa-brands fa-google-drive"></i></a></span></div>';
+        }).join('') : '<div class="small text-muted">' + (doc.rawValue ? 'Unrecognised value: ' + h(doc.rawValue) : 'No document') + '</div>') +
+        '</div></div>';
+    }).join('') + '</div>' : '<div class="text-muted small">No document columns configured.</div>';
+
+    $('historyCount').textContent = d.history.length;
+    $('detailHistory').innerHTML = d.history.length ? '<div class="accordion" id="historyAcc">' + d.history.map(function (t, k) {
+      var id = 'h' + k;
+      return '<div class="accordion-item"><h3 class="accordion-header"><button class="accordion-button' + (k ? ' collapsed' : '') + '" type="button" data-bs-toggle="collapse" data-bs-target="#' + id + '">' +
+        '<span class="me-2 font-monospace small">' + h(t.transactionId) + '</span><span class="small text-muted me-2">' + h(t.time) + '</span>' + statusBadge(t.status) + '<span class="ms-2 small text-muted">' + t.changes.length + ' change(s)</span></button></h3>' +
+        '<div id="' + id + '" class="accordion-collapse collapse' + (k ? '' : ' show') + '" data-bs-parent="#historyAcc"><div class="accordion-body p-0">' +
+        '<div class="small px-3 pt-2 text-muted">By ' + h(t.changedBy) + '</div>' +
+        '<div class="table-responsive"><table class="table table-sm admin-table history-change mb-0"><thead><tr><th>Field</th><th>Previous value</th><th>Updated value</th><th>Document details</th></tr></thead><tbody>' +
+        t.changes.map(function (c) {
+          return '<tr><td class="fw-semibold">' + h(c.field) + '</td><td class="old-val">' + linkify(c.previousValue) + '</td><td class="new-val">' + linkify(c.updatedValue) + '</td><td class="small">' + h(c.documentDetails) + '</td></tr>';
+        }).join('') + '</tbody></table></div>' +
+        (t.statusEvents.length ? '<div class="px-3 py-2 small">' + t.statusEvents.map(function (s) { return '<div><i class="fa-solid fa-gavel me-1"></i>' + h(s.time) + ' – ' + h(s.status) + ' by ' + h(s.by) + (s.note ? ' (' + h(s.note) + ')' : '') + '</div>'; }).join('') + '</div>' : '') +
+        '</div></div></div>';
+    }).join('') + '</div>' : '<div class="text-muted small">No corrections have been made to this application.</div>';
+  }
+
+  function decide(decision) {
+    var d = A.current;
+    if (!d) return;
+    if (!window.confirm(decision === 'REJECT' ? 'Reject this correction and restore the previous values?' : 'Approve this correction?')) return;
+    var remark = $('decisionRemark') ? $('decisionRemark').value : '';
+    call('adminSetStatus', [A.token, d.applicationNumber, d.lastTransactionId, decision, remark], { loading: 'Saving decision…' }).then(function (r) {
+      toast('Status set to ' + r.status + (r.reverted.length ? ' – reverted: ' + r.reverted.join(', ') : '') + (r.skipped.length ? ' – skipped: ' + r.skipped.join(', ') : ''));
+      openApp(d.applicationNumber);
+    }).catch(function (err) { if (err.code !== 'SESSION_EXPIRED') alertBox('danger', errMsg(err)); });
+  }
+
+  /* ---------------- Viewer ---------------- */
+  var pdfJsPromise = null;
+  function loadPdfJs() {
+    if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+    if (pdfJsPromise) return pdfJsPromise;
+    pdfJsPromise = new Promise(function (resolve, reject) {
+      var s = document.createElement('script'); s.src = PDFJS_URL;
+      s.onload = function () { if (!window.pdfjsLib) return reject(); window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER; resolve(window.pdfjsLib); };
+      s.onerror = function () { pdfJsPromise = null; reject(); };
+      document.head.appendChild(s);
+    });
+    return pdfJsPromise;
+  }
+  function viewFile(fileId) {
+    call('adminViewDocument', [A.token, A.current.applicationNumber, fileId], { loading: 'Opening document…' }).then(function (doc) {
+      var bin = atob(doc.data), bytes = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      if (A.objectUrl) URL.revokeObjectURL(A.objectUrl);
+      A.objectUrl = URL.createObjectURL(new Blob([bytes], { type: doc.mimeType }));
+      $('docModalTitle').textContent = doc.name;
+      $('docDownload').href = A.objectUrl; $('docDownload').setAttribute('download', doc.name);
+      var body = $('docModalBody');
+      if (/^image\//.test(doc.mimeType)) body.innerHTML = '<img alt="" src="' + A.objectUrl + '">';
+      else {
+        body.innerHTML = '<div class="text-white p-4">Rendering…</div>';
+        loadPdfJs().then(function (lib) { return lib.getDocument({ data: bytes }).promise; }).then(function (pdf) {
+          var wrap = document.createElement('div'); wrap.style.cssText = 'width:100%;max-height:75vh;overflow:auto;padding:12px';
+          body.innerHTML = ''; body.appendChild(wrap);
+          var chain = Promise.resolve();
+          for (var p = 1; p <= Math.min(pdf.numPages, 30); p++) (function (n) {
+            chain = chain.then(function () { return pdf.getPage(n); }).then(function (page) {
+              var w = Math.min(wrap.clientWidth - 24, 1000) || 800, vp0 = page.getViewport({ scale: 1 });
+              var vp = page.getViewport({ scale: w / vp0.width * (window.devicePixelRatio || 1) });
+              var c = document.createElement('canvas'); c.width = vp.width; c.height = vp.height;
+              c.style.cssText = 'width:100%;max-width:1000px;display:block;margin:0 auto 12px;background:#fff';
+              wrap.appendChild(c);
+              return page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+            });
+          })(p);
+          return chain;
+        }).catch(function () { body.innerHTML = '<iframe title="document" src="' + A.objectUrl + '"></iframe>'; });
+      }
+      bootstrap.Modal.getOrCreateInstance($('docModal')).show();
+    }).catch(function (err) { if (err.code !== 'SESSION_EXPIRED') toast(errMsg(err), 'danger'); });
+  }
+
+  /* ---------------- Session ---------------- */
+  function tick() {
+    if (!A.token) return;
+    var rem = Math.round(A.idleSeconds - (Date.now() - A.lastContact) / 1000);
+    if (rem <= 0) { expired(); return; }
+    var t = Math.floor(rem / 60) + ':' + ('0' + rem % 60).slice(-2);
+    $('sessionTimerText').textContent = t;
+    $('sessionTimer').classList.toggle('warn', rem <= 120);
+    if (rem <= 120) { $('sessionModalCountdown').textContent = t; if (!A.warned) { A.warned = true; bootstrap.Modal.getOrCreateInstance($('sessionModal')).show(); } }
+  }
+  function keepAlive(silent) {
+    A.lastKeepAlive = Date.now();
+    return call('adminKeepAlive', [A.token], { silent: silent }).then(function () { A.warned = false; bootstrap.Modal.getOrCreateInstance($('sessionModal')).hide(); }).catch(function () { });
+  }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    $('loginForm').addEventListener('submit', doLogin);
+    $('btnLogout').addEventListener('click', logout);
+    $('btnRefresh').addEventListener('click', function () { A.duplicatesLoaded = false; loadDashboard(); });
+    $('btnRefreshConfig').addEventListener('click', function () {
+      call('adminRefreshConfig', [A.token], { loading: 'Reloading field configuration…' }).then(function (r) {
+        toast('Field configuration reloaded: ' + r.fields + ' fields, ' + r.documents + ' document fields, ' + r.editable + ' editable.');
+      }).catch(function (err) { if (err.code !== 'SESSION_EXPIRED') alertBox('danger', errMsg(err)); });
+    });
+    $('searchForm').addEventListener('submit', doSearch);
+    $('tabDuplicatesBtn').addEventListener('shown.bs.tab', loadDuplicates);
+    $('btnBackDashboard').addEventListener('click', function () { loadDashboard(); });
+    $('btnStaySignedIn').addEventListener('click', function () { keepAlive(false); });
+    document.addEventListener('click', function (e) {
+      var o = e.target.closest('.js-open-app');
+      if (o) { e.preventDefault(); openApp(o.getAttribute('data-app')); return; }
+      var v = e.target.closest('.js-view-file');
+      if (v) { viewFile(v.getAttribute('data-id')); return; }
+      if (e.target.closest('#btnApprove')) decide('APPROVE');
+      if (e.target.closest('#btnReject')) decide('REJECT');
+    });
+    $('docModal').addEventListener('hidden.bs.modal', function () { $('docModalBody').innerHTML = ''; if (A.objectUrl) { URL.revokeObjectURL(A.objectUrl); A.objectUrl = null; } });
+    ['keydown', 'click', 'touchstart'].forEach(function (ev) {
+      document.addEventListener(ev, function () {
+        if (A.token && !A.warned && !A.busy && Date.now() - A.lastContact > 120000 && Date.now() - A.lastKeepAlive > 60000) keepAlive(true);
+      }, { passive: true });
+    });
+    setInterval(tick, 1000);
+
+    var saved = storage('get');
+    if (saved) {
+      A.token = saved;
+      try { A.user = sessionStorage.getItem(TOKEN_KEY + '_u') || ''; } catch (x) { }
+      loadDashboard();
+    } else {
+      showView('login');
+    }
+  });
+})();
+</script>

@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title><?= portalTitle ?> – Administration</title>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" rel="stylesheet">
+  <?!= include('Styles'); ?>
+  <style>
+    .stat-card { border-radius: 12px; border: 1px solid var(--portal-border); background: #fff; padding: 1rem; height: 100%; }
+    .stat-value { font-size: 1.7rem; font-weight: 700; color: var(--portal-navy); line-height: 1.1; font-variant-numeric: tabular-nums; }
+    .stat-label { font-size: 12.5px; color: var(--portal-muted); }
+    .stat-icon { width: 40px; height: 40px; border-radius: 10px; display: flex; align-items: center; justify-content: center; background: rgba(11,61,110,.08); color: var(--portal-navy); }
+    .admin-table td, .admin-table th { font-size: 13.5px; vertical-align: top; }
+    .admin-table tr.is-modified td, .admin-table tr.is-modified th { background: var(--portal-modified); }
+    .clickable { cursor: pointer; }
+    .history-change td { font-size: 13px; word-break: break-word; }
+    .nav-tabs .nav-link { font-size: 14px; }
+  </style>
+</head>
+<body>
+  <header class="portal-header">
+    <div class="gov-strip">
+      <div class="container d-flex justify-content-between align-items-center">
+        <span><i class="fa-solid fa-landmark me-1"></i><?= orgName ?></span>
+        <span id="sessionTimer" class="session-timer d-none"><i class="fa-regular fa-clock me-1"></i><span id="sessionTimerText">--:--</span></span>
+      </div>
+    </div>
+    <div class="container py-3 d-flex align-items-center justify-content-between gap-2">
+      <div class="d-flex align-items-center gap-3">
+        <div class="brand-mark"><i class="fa-solid fa-user-gear"></i></div>
+        <div>
+          <h1 class="portal-title mb-0">Administration</h1>
+          <div class="portal-subtitle"><?= portalTitle ?></div>
+        </div>
+      </div>
+      <div class="d-flex align-items-center gap-2">
+        <span class="small d-none d-md-inline" id="adminUser"></span>
+        <button type="button" id="btnLogout" class="btn btn-outline-light btn-sm d-none"><i class="fa-solid fa-right-from-bracket me-1"></i>Logout</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="container py-4">
+    <div id="globalAlert" class="alert d-none" role="alert"></div>
+
+    <!-- Login -->
+    <section id="view-login" class="view">
+      <div class="portal-card login-card p-4 p-md-5">
+        <div class="text-center mb-4">
+          <div class="login-illustration"><i class="fa-solid fa-lock"></i></div>
+          <h2 class="h4 mb-1">Administrator Login</h2>
+          <p class="text-muted small mb-0">Authorised personnel only. All access is logged.</p>
+        </div>
+        <div id="loginError" class="alert alert-danger small d-none"></div>
+        <form id="loginForm" novalidate>
+          <div class="mb-3">
+            <label class="form-label" for="adminUsername">Username</label>
+            <input type="text" class="form-control" id="adminUsername" autocomplete="username" maxlength="64" required autocapitalize="off" spellcheck="false">
+          </div>
+          <div class="mb-4">
+            <label class="form-label" for="adminPassword">Password</label>
+            <input type="password" class="form-control" id="adminPassword" autocomplete="current-password" maxlength="200" required>
+          </div>
+          <button type="submit" class="btn btn-primary w-100" id="btnLogin"><i class="fa-solid fa-right-to-bracket me-1"></i>Login</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- Dashboard -->
+    <section id="view-dashboard" class="view d-none">
+      <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+        <h2 class="h4 mb-0">Dashboard</h2>
+        <div class="d-flex gap-2">
+          <button type="button" class="btn btn-sm btn-outline-secondary" id="btnRefreshConfig" title="Reload Field_Config tab"><i class="fa-solid fa-sliders me-1"></i>Refresh field configuration</button>
+          <button type="button" class="btn btn-sm btn-outline-primary" id="btnRefresh"><i class="fa-solid fa-rotate me-1"></i>Refresh</button>
+        </div>
+      </div>
+      <div id="portalState" class="mb-3"></div>
+      <div class="row g-3 mb-4" id="statCards"></div>
+
+      <div class="portal-card mb-4">
+        <div class="card-body p-3">
+          <form id="searchForm" class="row g-2 align-items-center" novalidate>
+            <div class="col-12 col-md">
+              <label class="visually-hidden" for="searchInput">Search</label>
+              <div class="input-group">
+                <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
+                <input type="search" class="form-control" id="searchInput" placeholder="Application Number, email address or mobile number" maxlength="254">
+              </div>
+            </div>
+            <div class="col-12 col-md-auto"><button class="btn btn-primary w-100" type="submit">Search</button></div>
+          </form>
+          <div id="searchResults" class="mt-3"></div>
+        </div>
+      </div>
+
+      <ul class="nav nav-tabs mb-3" role="tablist">
+        <li class="nav-item" role="presentation"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tabRecent" type="button" role="tab">Recent corrections</button></li>
+        <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabDuplicates" type="button" role="tab" id="tabDuplicatesBtn">Duplicate registrations</button></li>
+      </ul>
+      <div class="tab-content">
+        <div class="tab-pane fade show active" id="tabRecent" role="tabpanel"><div class="portal-card"><div class="table-responsive" id="recentTable"></div></div></div>
+        <div class="tab-pane fade" id="tabDuplicates" role="tabpanel"><div id="duplicatesArea" class="text-muted small">Open this tab to load duplicates.</div></div>
+      </div>
+    </section>
+
+    <!-- Application details -->
+    <section id="view-detail" class="view d-none">
+      <button type="button" class="btn btn-link px-0 mb-2" id="btnBackDashboard"><i class="fa-solid fa-arrow-left me-1"></i>Back to dashboard</button>
+      <div class="app-banner mb-3" id="detailBanner"></div>
+      <div id="detailDecision" class="mb-3"></div>
+      <ul class="nav nav-tabs mb-3" role="tablist">
+        <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#dTabDetails" type="button">Application details</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#dTabDocs" type="button">Documents</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#dTabHistory" type="button">Correction history <span class="badge bg-secondary" id="historyCount"></span></button></li>
+      </ul>
+      <div class="tab-content">
+        <div class="tab-pane fade show active" id="dTabDetails"><div class="d-grid gap-3" id="detailSections"></div></div>
+        <div class="tab-pane fade" id="dTabDocs"><div id="detailDocs"></div></div>
+        <div class="tab-pane fade" id="dTabHistory"><div id="detailHistory"></div></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="portal-footer"><div class="container small"><?= orgName ?> &middot; Administration</div></footer>
+
+  <div id="loader" class="loader-overlay d-none"><div class="loader-box"><div class="spinner-border text-primary" role="status"></div><div id="loaderText" class="mt-3">Please wait…</div></div></div>
+
+  <div class="modal fade" id="docModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-fullscreen-md-down">
+      <div class="modal-content">
+        <div class="modal-header"><h2 class="modal-title fs-6" id="docModalTitle">Document</h2><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+        <div class="modal-body p-0 doc-viewer" id="docModalBody"></div>
+        <div class="modal-footer"><a id="docDownload" class="btn btn-outline-secondary btn-sm" download><i class="fa-solid fa-download me-1"></i>Download</a><button type="button" class="btn btn-primary btn-sm" data-bs-dismiss="modal">Close</button></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal fade" id="sessionModal" tabindex="-1" data-bs-backdrop="static" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-sm"><div class="modal-content"><div class="modal-body text-center p-4">
+      <i class="fa-regular fa-hourglass-half fa-2x text-warning mb-3"></i>
+      <h2 class="fs-6">Session about to expire</h2>
+      <p class="small text-muted">Logging out in <strong id="sessionModalCountdown">--</strong></p>
+      <button type="button" class="btn btn-primary w-100" id="btnStaySignedIn">Stay signed in</button>
+    </div></div></div>
+  </div>
+  <div class="toast-container position-fixed bottom-0 end-0 p-3" id="toastArea"></div>
+
+  <script>window.PORTAL_CONFIG = <?!= publicConfigJson ?>;</script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <?!= include('AdminJavaScript'); ?>
+</body>
+</html>
