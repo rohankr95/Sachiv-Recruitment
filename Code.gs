@@ -20,7 +20,7 @@
 function doGet(e) {
   var page = (e && e.parameter && e.parameter.page) ? String(e.parameter.page) : '';
   var isAdmin = page === 'admin';
-  var template = HtmlService.createTemplateFromFile(isAdmin ? 'Admin' : 'Index');
+  var template = HtmlService.createTemplateFromFile(isAdmin ? 'AdminPage' : 'Index');
   template.publicConfigJson = safeJsonForHtml_(getPublicConfig_(isAdmin));
   template.portalTitle = CONFIG.PORTAL_TITLE;
   template.orgName = CONFIG.ORGANISATION_NAME;

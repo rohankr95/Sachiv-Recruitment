@@ -9,7 +9,7 @@ Applicants log in with their **registered email address or mobile number plus da
 ```
  Browser (applicant / admin)                Google Apps Script web app                Google Workspace
  ─────────────────────────────              ───────────────────────────                ─────────────────
- Index.html / Admin.html        google.script.run   Code.gs  (doGet, helpers)
+ Index.html / AdminPage.html    google.script.run   Code.gs  (doGet, helpers)
   ├ Login.html            ─────────────────────▶   Authentication.gs (login, sessions,   ─▶  CacheService
   ├ ApplicationForm.html  ◀─────────────────────     rate limit)                              (sessions, limits,
   ├ Preview.html            JSON {ok,data|error}    Application.gs   (field mapping,           Field_Config cache)
@@ -45,7 +45,7 @@ Applicants log in with their **registered email address or mobile number plus da
 | `Setup.gs` | `setupPortal()`: system columns, Field_Config, Correction_Log, folders, trigger, sharing checks |
 | `SampleData.gs` | `createSampleData()`: 2,500-row synthetic test spreadsheet |
 | `Index.html`, `Login.html`, `ApplicationForm.html`, `Preview.html`, `Styles.html`, `JavaScript.html` | Applicant UI |
-| `Admin.html`, `AdminJavaScript.html` | Admin dashboard UI (`?page=admin`) |
+| `AdminPage.html`, `AdminJavaScript.html` | Admin dashboard UI (`?page=admin`) |
 | `appsscript.json` | Manifest (V8, web app settings, OAuth scopes) |
 | `local-test/` | Offline test harness (Node + Playwright). Not uploaded to Apps Script |
 
