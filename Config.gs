@@ -46,11 +46,11 @@ var CONFIG = {
   /* The first alias that exists in the sheet is used.                  */
   /* ------------------------------------------------------------------ */
   KEY_COLUMNS: {
-    APPLICATION_NUMBER: ['Application Number', 'Application No', 'Application No.', 'Registration Number', 'Registration No', 'Reg No'],
-    EMAIL: ['Email Address', 'Email', 'Email ID', 'E-mail', 'E-mail Address', 'Registered Email'],
-    MOBILE: ['Mobile Number', 'Mobile No', 'Mobile No.', 'Mobile', 'Registered Mobile Number', 'Contact Number', 'Phone Number'],
-    DOB: ['Date of Birth', 'DOB', 'Birth Date', 'Date Of Birth (DD/MM/YYYY)'],
-    NAME: ['Applicant Name', 'Name of Applicant', 'Candidate Name', 'Full Name', 'Name']
+    APPLICATION_NUMBER: ['Application Number', 'Application No', 'आवेदन क्रमांक', 'Application No.', 'Registration Number', 'Registration No', 'Reg No'],
+    EMAIL: ['Email Address', 'ईमेल', 'ई-मेल', 'Email', 'Email ID', 'E-mail', 'E-mail Address', 'Registered Email'],
+    MOBILE: ['मोबाइल नंबर', 'मोबाइल नम्बर', 'Mobile Number', 'Mobile No', 'Mobile No.', 'Mobile', 'Registered Mobile Number', 'Contact Number', 'Phone Number'],
+    DOB: ['जन्म तिथि', 'जन्मतिथि', 'Date of Birth', 'DOB', 'Birth Date', 'Date Of Birth (DD/MM/YYYY)'],
+    NAME: ['आवेदक/आवेदिका का नाम (अंग्रेजी में, कैपिटल लेटर में)', 'आवेदक/आवेदिका का नाम (हिन्दी में)', 'Applicant Name', 'Name of Applicant', 'Candidate Name', 'Full Name', 'Name']
   },
 
   // Columns maintained by the portal. setupPortal() appends them to the end
@@ -155,8 +155,8 @@ var CONFIG = {
   /* ------------------------------------------------------------------ */
   /* Branding                                                            */
   /* ------------------------------------------------------------------ */
-  PORTAL_TITLE: 'Application Correction Portal',
-  ORGANISATION_NAME: 'District Administration, Surajpur',
+  PORTAL_TITLE: 'Gram Panchayat Sachiv Recruitment – Application Correction Portal',
+  ORGANISATION_NAME: 'Zila Panchayat, Surajpur (C.G.)',
   SUPPORT_TEXT: 'For assistance, contact the helpdesk during office hours.',
 
   /* ------------------------------------------------------------------ */

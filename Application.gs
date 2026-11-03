@@ -155,9 +155,9 @@ function buildFieldConfig_(headers, cols) {
       required: auto.required,
       editable: auto.editable,
       options: auto.options,
-      pattern: '',
+      pattern: auto.pattern || '',
       maxLength: 0,
-      help: '',
+      help: auto.help || '',
       order: i + 1
     };
     if (o) {
@@ -191,8 +191,8 @@ function buildFieldConfig_(headers, cols) {
   return { fields: fields, byHeader: byKey };
 }
 
-var DOC_KEYWORDS_ = /(upload|document|certificate|photo|photograph|signature|marksheet|mark sheet|proof|scan|attachment|attach|file|copy of|pdf|image)/i;
-var SELECT_KEYWORDS_ = /(gender|\bsex\b|category|caste|marital|religion|nationality|whether|are you|do you|have you|pwd|divyang|disab|\bews\b|domicile|\bboard\b|medium|stream|blood group|minority|\bbpl\b|ex.?service|yes\/no)/i;
+var DOC_KEYWORDS_ = /(upload|document|certificate|photo|photograph|signature|marksheet|mark sheet|proof|scan|attachment|attach|file|copy of|pdf|image|अपलोड|संलग्न)/i;
+var SELECT_KEYWORDS_ = /(gender|\bsex\b|category|caste|marital|religion|nationality|whether|are you|do you|have you|pwd|divyang|disab|\bews\b|domicile|\bboard\b|medium|stream|blood group|minority|\bbpl\b|ex.?service|yes\/no|क्या |लिंग|श्रेणी|प्रवर्ग|वैवाहिक|प्रकार|धर्म)/i;
 
 /**
  * Infers role, type, section, flags and (for selects) options for a column.
@@ -216,6 +216,9 @@ function detectField_(header, samples, cols, index) {
   var driveLinks = samples.filter(function (v) { return /drive\.google\.com|docs\.google\.com/i.test(String(v)); }).length;
   var looksLikeDocs = samples.length ? (driveLinks / samples.length >= 0.5) : DOC_KEYWORDS_.test(h);
   var dateSamples = samples.filter(function (v) { return isDateObject_(v); }).length;
+  // A long text that is identical in every row (e.g. an accepted declaration) is shown read-only.
+  var constantText = samples.length >= 5 && String(samples[0]).length > 40 &&
+    samples.every(function (v) { return String(v) === String(samples[0]); });
 
   var type = 'text';
   if (role === 'appNo') type = 'readonly';
@@ -225,12 +228,13 @@ function detectField_(header, samples, cols, index) {
   else if (role === 'dob') type = 'date';
   else if (h === 'timestamp' || h === 'submission date' || h === 'submitted on') type = 'readonly';
   else if (looksLikeDocs && (driveLinks > 0 || DOC_KEYWORDS_.test(h))) type = 'document';
+  else if (constantText || /(declaration|घोषणा|स्वीकृति)/.test(h)) type = 'readonly';
   else if (/e-?mail/.test(h)) type = 'email';
-  else if (/(mobile|phone|contact no|contact number|whatsapp)/.test(h)) type = 'mobile';
+  else if (/(mobile|phone|contact no|contact number|whatsapp|मोबाइल|फोन)/.test(h)) type = 'mobile';
   else if (/(date|\bdob\b|birth)/.test(h) || (samples.length && dateSamples / samples.length > 0.8)) type = 'date';
-  else if (/(pin ?code|postal code|zip)/.test(h)) type = 'pincode';
-  else if (/(address|remark|description|details of|reason)/.test(h)) type = 'textarea';
-  else if (/(marks|percentage|\bage\b|year|score|cgpa|sgpa|experience|income)/.test(h) && samples.length &&
+  else if (/(pin ?code|postal code|zip|पिन ?कोड)/.test(h)) type = 'pincode';
+  else if (/(address|remark|description|details of|reason|पता|विवरण)/.test(h)) type = 'textarea';
+  else if (/(marks|percentage|\bage\b|year|score|cgpa|sgpa|experience|income|प्रतिशत|प्राप्तांक|पूर्णांक|वर्ष|माह)/.test(h) && samples.length &&
            samples.every(function (v) { return typeof v === 'number' || /^-?\d+(\.\d+)?$/.test(String(v).trim()); })) type = 'number';
 
   var options = [];
@@ -238,21 +242,36 @@ function detectField_(header, samples, cols, index) {
     var distinct = {};
     samples.forEach(function (v) { var s = String(v).trim(); if (s) distinct[s] = true; });
     var list = Object.keys(distinct);
-    if (list.length > 0 && list.length <= 15) { type = 'select'; options = list.sort(); }
+    // A real dropdown has few values that repeat; free text (many one-off values) stays text.
+    if (list.length > 0 && list.length <= 15 && samples.length >= list.length * 3) {
+      type = 'select';
+      options = list.sort();
+      // Yes/No questions: always offer both answers even if one never appears in the data.
+      var yesNo = [['हाँ', 'नहीं'], ['Yes', 'No']];
+      yesNo.forEach(function (pair) {
+        if (options.some(function (o) { return pair.indexOf(o) !== -1; }) && options.every(function (o) { return pair.indexOf(o) !== -1; })) {
+          options = pair.slice();
+        }
+      });
+    }
   }
 
   var section = CONFIG.DEFAULT_SECTION;
   if (type === 'document') section = CONFIG.DOCUMENT_SECTION;
-  else if (role === 'email' || role === 'mobile' || /(e-?mail|mobile|phone|contact|whatsapp)/.test(h)) section = 'Contact Information';
-  else if (/(categor|caste|reservation|\bews\b|pwd|divyang|disab|domicile|ex.?service|minority|quota|\bbpl\b|creamy)/.test(h)) section = 'Category and Reservation Details';
-  else if (/(qualification|education|board|universit|marks|percentage|passing|school|college|degree|10th|12th|class|division|roll no|subject|stream|cgpa|institute|diploma|graduat|matric)/.test(h)) section = 'Educational Qualifications';
-  else if (/(address|village|city|town|district|state|pin ?code|block|tehsil|post office|police station|ward|panchayat|house|street|landmark|locality|mohalla)/.test(h)) section = 'Address Details';
-  else if (role === 'name' || role === 'dob' || /(name|father|mother|husband|guardian|spouse|gender|\bsex\b|birth|\bdob\b|\bage\b|marital|nationality|religion|aadhaar|aadhar|identification|blood)/.test(h)) section = 'Personal Information';
+  else if (role === 'email' || role === 'mobile' || /(e-?mail|mobile|phone|contact|whatsapp|मोबाइल|ईमेल|ई-मेल)/.test(h)) section = 'Contact Information';
+  else if (/(categor|caste|reservation|\bews\b|pwd|divyang|disab|domicile|ex.?service|minority|quota|\bbpl\b|creamy|जाति|प्रवर्ग|आरक्षण|दिव्यांग|सैनिक|मूल निवास|क्रीमीलेयर)/.test(h)) section = 'Category and Reservation Details';
+  else if (/(qualification|education|board|universit|marks|percentage|passing|school|college|degree|10th|12th|class|division|roll no|subject|stream|cgpa|institute|diploma|graduat|matric|हाई स्कूल|हायर सेकेंडरी|स्नातक|डिप्लोमा|अर्हता|विश्वविद्यालय|अंकसूची)/.test(h)) section = 'Educational Qualifications';
+  else if (/(address|village|city|town|district|state|pin ?code|block|tehsil|post office|police station|ward|panchayat|house|street|landmark|locality|mohalla|पता|पिन ?कोड)/.test(h)) section = 'Address Details';
+  else if (/(आवेदित पद|अनुभव|प्रकरण|रोजगार|पदच्युत|शासकीय सेवा)/.test(h)) section = CONFIG.DEFAULT_SECTION;
+  else if (role === 'name' || role === 'dob' || /(name|father|mother|husband|guardian|spouse|gender|\bsex\b|birth|\bdob\b|\bage\b|marital|nationality|religion|aadhaar|aadhar|identification|blood|नाम|पिता|पति|माता|लिंग|जन्म|वैवाहिक|विवाह|धर्म|आधार)/.test(h)) section = 'Personal Information';
+
+  var pattern = '', help = '';
+  if (type === 'text' && /(capital|कैपिटल)/.test(h)) { pattern = "^[A-Z][A-Z .'-]*$"; help = 'Write in CAPITAL letters (English) / अंग्रेजी के कैपिटल अक्षरों में लिखें'; }
 
   var required = role === 'name' || role === 'dob' || role === 'email' || role === 'mobile';
   var editable = !(role === 'appNo' || role === 'system' || type === 'readonly' || type === 'hidden');
 
-  return { role: role, label: label, type: type, section: section, required: required, editable: editable, options: options };
+  return { role: role, label: label, type: type, section: section, required: required, editable: editable, options: options, pattern: pattern, help: help };
 }
 
 /* ======================================================================== */

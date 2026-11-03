@@ -105,9 +105,15 @@ function setupFieldConfigSheet_(ss, appSheet, headers, cols, report) {
     cfgSheet.getRange(2, 1, cfgSheet.getLastRow() - 1, 1).getDisplayValues().forEach(function (r) { existing[normalizeHeader_(r[0])] = true; });
   }
 
-  // Sample up to 300 rows in one read to detect document / date / select columns.
+  // Read up to 5,000 rows in one call to detect document / date / select columns and dropdown options.
   var dataRows = appSheet.getLastRow() - CONFIG.HEADER_ROW;
-  var sample = dataRows > 0 ? appSheet.getRange(CONFIG.HEADER_ROW + 1, 1, Math.min(300, dataRows), headers.length).getValues() : [];
+  var sample = dataRows > 0 ? appSheet.getRange(CONFIG.HEADER_ROW + 1, 1, Math.min(5000, dataRows), headers.length).getValues() : [];
+  var appNoIsFormula = dataRows > 0 && appSheet.getRange(CONFIG.HEADER_ROW + 1, cols.appNo + 1, Math.min(50, dataRows), 1)
+    .getFormulas().some(function (r) { return !!r[0]; });
+  if (appNoIsFormula && cols.email !== -1) {
+    report.push('NOTE: the Application Number column contains formulas. Email is set to non-editable in Field_Config ' +
+      'because changing it could change the application number.');
+  }
 
   var rows = [];
   headers.forEach(function (h, i) {
@@ -115,7 +121,15 @@ function setupFieldConfigSheet_(ss, appSheet, headers, cols, report) {
     var samples = sample.map(function (r) { return r[i]; });
     var d = detectField_(h, samples, cols, i);
     var opts = d.options.some(function (o) { return o.indexOf(',') !== -1; }) ? d.options.join(' | ') : d.options.join(', ');
-    rows.push([h, d.label, d.section, d.type, d.required ? 'Yes' : 'No', d.editable ? 'Yes' : 'No', opts, '', '', '', i + 1]);
+    var editable = d.editable;
+    var help = d.help || '';
+    if (appNoIsFormula && i === cols.email) {
+      // The application number is calculated from the email, so changing the
+      // email would change (or break) the application number.
+      editable = false;
+      help = 'Email cannot be changed here because the application number is linked to it.';
+    }
+    rows.push([h, d.label, d.section, d.type, d.required ? 'Yes' : 'No', editable ? 'Yes' : 'No', opts, d.pattern || '', '', help, i + 1]);
   });
   if (rows.length) {
     var start = Math.max(2, cfgSheet.getLastRow() + 1);

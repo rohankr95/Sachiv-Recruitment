@@ -13,8 +13,9 @@ const TZ = 'Asia/Kolkata';
 const SRC = path.join(__dirname, '..');
 
 function pad(n, w = 2) { return String(n).padStart(w, '0'); }
+const FMT_CACHE = {};
 function parts(date, tz) {
-  const f = new Intl.DateTimeFormat('en-GB', { timeZone: tz || TZ, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+  const f = FMT_CACHE[tz || TZ] || (FMT_CACHE[tz || TZ] = new Intl.DateTimeFormat('en-GB', { timeZone: tz || TZ, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }));
   const o = {};
   f.formatToParts(date).forEach(p => { o[p.type] = p.value; });
   return o;
@@ -267,4 +268,41 @@ function createContext(opts = {}) {
   return ctx;
 }
 
-module.exports = { createContext, formatDate, Spreadsheet, TZ };
+/**
+ * Loads an exported sheet ({sheetName, values, formulas}; dates as {d: ISO})
+ * into a new mock spreadsheet and registers placeholder Drive files for
+ * every Drive file ID found, so documents can be viewed and replaced.
+ */
+function loadSheetJson(ctx, data) {
+  const state = ctx.__state;
+  const ss = ctx.SpreadsheetApp.create('Imported test data');
+  const sheet = ss.getSheets()[0].setName(data.sheetName);
+  sheet.maxRows = data.values.length + 100;
+  sheet.maxCols = data.values[0].length + 10;
+  const folder = ctx.DriveApp.createFolder('Original uploads (placeholders)');
+  const pdf = Buffer.from('%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF');
+  const toSigned = buf => Array.from(buf, b => (b > 127 ? b - 256 : b));
+  data.values.forEach((row, r) => {
+    sheet._row(r + 1);
+    row.forEach((v, c) => {
+      const val = v && typeof v === 'object' && v.d ? new Date(v.d) : v;
+      sheet.cells[r][c] = val;
+      const f = data.formulas[r] && data.formulas[r][c];
+      if (f) sheet.formulas[r][c] = f;
+      if (r > 0 && typeof val === 'string' && /drive\.google\.com/.test(val)) {
+        ctx.extractDriveFileIds_(val).forEach(id => {
+          if (state.files[id]) return;
+          const file = folder.createFile(ctx.Utilities.newBlob(toSigned(pdf), 'application/pdf', 'original_' + id.slice(0, 6) + '.pdf'));
+          delete state.files[file.id];
+          file.id = id;
+          state.files[id] = file;
+        });
+      }
+    });
+  });
+  state.props.set('SPREADSHEET_ID', ss.getId());
+  ctx.RUNTIME_.spreadsheet = null;
+  return { ss, sheet };
+}
+
+module.exports = { createContext, loadSheetJson, formatDate, Spreadsheet, TZ };

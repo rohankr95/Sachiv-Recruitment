@@ -173,6 +173,14 @@ There are 33 backend tests covering login, duplicates, rate limiting, access con
 node local-test/ui-test.js /tmp/screens
 ```
 
+To test against **your own sheet**, export it as JSON (`{sheetName, values, formulas}`, dates as `{"d": ISO}`) **outside the repository** and run:
+
+```bash
+node local-test/sheet-data-test.js /path/outside/repo/sheet.json
+```
+
+It prints the detected key columns and field mapping, then checks data quality, tries login for every row (email + DOB and mobile + DOB), loads every application, submits sample corrections, and confirms that no untouched cell changed. Never commit real applicant data.
+
 The mock is a test aid. Always finish with tests A–D on real Google infrastructure.
 
 ## 9. Troubleshooting
