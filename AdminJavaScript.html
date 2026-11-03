@@ -104,7 +104,7 @@
     call('adminGetDashboard', [A.token], { loading: 'Loading dashboard…' }).then(function (d) {
       var s = d.stats;
       $('statCards').innerHTML =
-        statCard('fa-file-lines', 'Total Applications', s.totalApplications) +
+        statCard('fa-file-lines', 'Total Applications', s.totalApplications, s.excludedIncomplete ? s.excludedIncomplete + ' incomplete excluded' : '') +
         statCard('fa-pen-to-square', 'Applications Corrected', s.applicationsCorrected, s.totalApplications ? Math.round(s.applicationsCorrected * 100 / s.totalApplications) + '% of total' : '') +
         statCard('fa-hourglass-half', 'Pending Corrections', d.approvalEnabled ? s.pendingCorrections : '—', d.approvalEnabled ? (s.approved + ' approved, ' + s.rejected + ' rejected') : 'Approval workflow disabled') +
         statCard('fa-file-arrow-up', 'Documents Replaced', s.documentsReplaced) +
@@ -169,6 +169,7 @@
       '<div class="col-6 col-md-2"><div class="meta-label">Status</div>' + statusBadge(d.status) + '</div>' +
       '<div class="col-6 col-md-2"><div class="meta-label">Corrections</div><div class="fw-semibold">' + h(d.correctionCount) + '</div></div>' +
       '<div class="col-6 col-md-2"><div class="meta-label">Last modified</div><div class="small">' + h(d.lastModified || '—') + '</div></div></div>' +
+      (d.excluded ? '<div class="mt-2"><span class="badge bg-danger">Excluded – incomplete application (no date of birth); applicant cannot log in or correct</span></div>' : '') +
       (d.modifiedFields.length ? '<div class="mt-2 small"><strong>Modified fields:</strong> ' + d.modifiedFields.map(function (f) { return '<span class="badge badge-modified me-1">' + h(f) + '</span>'; }).join('') + '</div>' : '') +
       (d.duplicates.email.length ? '<div class="mt-2 small"><span class="badge badge-duplicate">Duplicate email</span> also used by ' + dupLinks(d.duplicates.email) + '</div>' : '') +
       (d.duplicates.mobile.length ? '<div class="mt-1 small"><span class="badge badge-duplicate">Duplicate mobile</span> also used by ' + dupLinks(d.duplicates.mobile) + '</div>' : '');

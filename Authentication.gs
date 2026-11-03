@@ -65,7 +65,9 @@ function login(identifier, dob) {
         : 'Too many failed attempts. Login for this email/mobile is locked for ' + CONFIG.RATE_LIMIT.LOCKOUT_MINUTES + ' minutes.');
     }
 
-    var accessibleIdx = CONFIG.DUPLICATE_IDENTIFIER_POLICY === 'SHOW_ALL' ? candidates : matched;
+    var accessibleIdx = (CONFIG.DUPLICATE_IDENTIFIER_POLICY === 'SHOW_ALL' ? candidates : matched).filter(function (idx) {
+      return !isExcludedRow_(dobValues[idx], dobDisplay[idx]); // never expose incomplete (excluded) rows
+    });
     var appNoValues = readColumn_(ctx, ctx.cols.appNo, true);
 
     // Duplicate detection: how many rows share this applicant's email / mobile.

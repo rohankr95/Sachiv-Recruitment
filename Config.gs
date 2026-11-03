@@ -78,6 +78,12 @@ var CONFIG = {
   //      same person – otherwise one applicant can edit another's record.
   DUPLICATE_IDENTIFIER_POLICY: 'MATCH_DOB',
 
+  // Rows without a valid date of birth are incomplete applications (e.g. the
+  // Google Form ended because the applicant answered "No" to an eligibility
+  // question). When true they are excluded: they cannot log in, cannot be
+  // opened or corrected, and are counted separately on the admin dashboard.
+  EXCLUDE_ROWS_WITHOUT_DOB: true,
+
   // Mobile number rule (after removing spaces, +91 and leading 0).
   MOBILE_REGEX: '^[6-9][0-9]{9}$',
 

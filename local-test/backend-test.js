@@ -407,5 +407,21 @@ test('login reads only a handful of columns (no full-sheet read)', () => {
   assert.ok(cellsRead < 2500 * 12, 'cells read: ' + cellsRead);
 });
 
+test('rows without a date of birth are excluded (no login, no load, not counted)', () => {
+  const row = rowOf('APP202600100');
+  const email = cell(row, 'Email Address');
+  const before = ok(g.adminGetDashboard(admin)).stats;
+  sheet.getRange(row, col('Date of Birth')).setValue('');
+  fail(g.login(email, '1990-01-01'), 'AUTH_FAILED');
+  // even a session that somehow lists the app cannot open or submit it
+  const t = g.createSession_('applicant', { apps: ['APP202600100'], dup: {}, who: 'test', uploads: 0, staged: [] }, 15);
+  fail(g.loadApplication(t, 'APP202600100'), 'NOT_ALLOWED');
+  fail(g.submitCorrection(t, 'APP202600100', { version: '|0', declaration: true, changes: { 'Block': 'Odgi' } }), 'NOT_ALLOWED');
+  const after = ok(g.adminGetDashboard(admin)).stats;
+  assert.strictEqual(after.totalApplications, before.totalApplications - 1);
+  assert.strictEqual(after.excludedIncomplete, 1);
+  assert.strictEqual(ok(g.adminGetApplication(admin, 'APP202600100')).excluded, true);
+});
+
 console.log(results.join('\n'));
 console.log('\n' + passed + '/' + results.length + ' passed. (sample data generation: ' + tSample + ' ms in mock)');

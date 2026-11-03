@@ -69,10 +69,13 @@ function adminGetDashboard(token) {
     var counts = readColumn_(ctx, ctx.cols.count, false);
     var statuses = readColumn_(ctx, ctx.cols.status, true);
     var emails = ctx.cols.email !== -1 ? readColumn_(ctx, ctx.cols.email, false) : [];
+    var dobRaw = readColumn_(ctx, ctx.cols.dob, false);
+    var dobDisp = readColumn_(ctx, ctx.cols.dob, true);
 
-    var total = 0, corrected = 0, pending = 0, approved = 0, rejected = 0;
+    var total = 0, excluded = 0, corrected = 0, pending = 0, approved = 0, rejected = 0;
     for (var i = 0; i < appNos.length; i++) {
       if (!String(appNos[i]).trim()) continue;
+      if (isExcludedRow_(dobRaw[i], dobDisp[i])) { excluded++; continue; }
       total++;
       if ((Number(counts[i]) || 0) > 0) corrected++;
       var st = String(statuses[i] || '');
@@ -89,6 +92,7 @@ function adminGetDashboard(token) {
     return {
       stats: {
         totalApplications: total,
+        excludedIncomplete: excluded,
         applicationsCorrected: corrected,
         pendingCorrections: pending,
         approved: approved,
@@ -224,6 +228,7 @@ function adminGetApplication(token, appNo) {
       correctionCount: Number(row.values[ctx.cols.count]) || 0,
       lastModified: String(row.display[ctx.cols.lastModified] || ''),
       lastTransactionId: lastTxn,
+      excluded: isExcludedRow_(row.values[ctx.cols.dob], row.display[ctx.cols.dob]),
       canDecide: CONFIG.REQUIRE_APPROVAL === true && status === CONFIG.STATUS.PENDING && !!lastTxn,
       sections: sections,
       documents: documents,

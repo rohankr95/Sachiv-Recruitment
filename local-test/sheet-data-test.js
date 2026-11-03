@@ -82,6 +82,7 @@ const nodobRow = noDob[0];
 if (nodobRow !== undefined) {
   const r = g.login(String(emails[nodobRow]), '1990-01-01');
   say('  row without DOB (' + appNos[nodobRow] + ') login: ' + (r.ok ? 'ALLOWED (unexpected)' : 'refused – ' + r.code));
+  check(!r.ok, 'incomplete row was able to log in');
   clearRl();
 }
 check(emailFail.filter(s => !/^#/.test(s)).length === 0, 'some valid rows could not log in by email');

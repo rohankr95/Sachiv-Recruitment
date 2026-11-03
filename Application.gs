@@ -30,6 +30,7 @@ function loadApplication(token, appNo) {
     requireApplicationAccess_(session, appNo);
     var ctx = getSheetContext_();
     var row = readRow_(ctx, findRowByAppNo_(ctx, appNo));
+    requireNotExcluded_(ctx, row);
     return buildApplicationView_(ctx, row, token, appNo, session);
   });
 }
@@ -315,6 +316,17 @@ function sectionIcon_(name) {
   return 'fa-list';
 }
 
+/** True when a row is an excluded (incomplete) application – see CONFIG.EXCLUDE_ROWS_WITHOUT_DOB. */
+function isExcludedRow_(dobRaw, dobDisplay) {
+  return CONFIG.EXCLUDE_ROWS_WITHOUT_DOB === true && !toIsoDate_(dobRaw) && !toIsoDate_(dobDisplay);
+}
+
+function requireNotExcluded_(ctx, row) {
+  if (isExcludedRow_(row.values[ctx.cols.dob], row.display[ctx.cols.dob])) {
+    throw portalError_('NOT_ALLOWED', 'This application is incomplete and is not eligible for correction.');
+  }
+}
+
 function submissionBlockReason_(ctx, row) {
   if (CONFIG.PORTAL_OPEN !== true) return CONFIG.PORTAL_CLOSED_MESSAGE;
   var count = Number(row.values[ctx.cols.count]) || 0;
@@ -490,6 +502,7 @@ function applyCorrection_(session, token, appNo, clientVersion, changes, replace
   var ctx = getSheetContext_();
   var rowIndex = findRowByAppNo_(ctx, appNo);
   var row = readRow_(ctx, rowIndex);
+  requireNotExcluded_(ctx, row);
 
   if (clientVersion !== computeVersion_(ctx, row)) {
     throw portalError_('CONFLICT', 'This application was updated after you opened it (possibly from another device or tab). Please reload the application and make your corrections again.');
