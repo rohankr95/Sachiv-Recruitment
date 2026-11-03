@@ -780,10 +780,15 @@
     $('confirmAppNo').textContent = S.app.applicationNumber;
     $('confirmSummary').innerHTML = '<li>' + changed.length + ' field(s) will be updated</li><li>' + docs.length + ' document(s) will be replaced</li>';
     setStep(5);
+    // Enabled on 'shown.bs.modal': Bootstrap ignores hide() while the dialog is still
+    // animating open, so an early click would leave the dialog covering the result.
+    $('btnFinalSubmit').disabled = true;
     bootstrap.Modal.getOrCreateInstance($('confirmModal')).show();
   }
 
   function submitFinal() {
+    if ($('btnFinalSubmit').disabled) return;
+    $('btnFinalSubmit').disabled = true; // prevents a double submission
     bootstrap.Modal.getOrCreateInstance($('confirmModal')).hide();
     var changes = {};
     changedFields().forEach(function (f) { changes[f.key] = String(S.values[f.key] === undefined ? '' : S.values[f.key]); });
@@ -793,7 +798,6 @@
       replacedDocuments: stagedDocs().map(function (d) { return d.key; }),
       declaration: true
     };
-    $('btnFinalSubmit').disabled = true;
     call('submitCorrection', [S.token, S.app.applicationNumber, payload], { loading: 'Submitting your corrections… Please do not close this page.' })
       .then(function (res) {
         S.original = {}; S.values = {}; S.staged = {}; S.fields = []; S.docs = [];
@@ -821,7 +825,7 @@
           alertBox('danger', errorMessage(err));
         }
       })
-      .finally(function () { $('btnFinalSubmit').disabled = false; });
+      .finally(function () { /* re-enabled the next time the dialog has fully opened */ });
   }
 
   /* ------------------------------------------------------------------ */
@@ -940,6 +944,7 @@
     $('btnBackToEdit').addEventListener('click', function () { showView('edit'); });
     $('btnConfirmSubmit').addEventListener('click', openConfirm);
     $('btnFinalSubmit').addEventListener('click', submitFinal);
+    $('confirmModal').addEventListener('shown.bs.modal', function () { $('btnFinalSubmit').disabled = false; });
     $('confirmModal').addEventListener('hidden.bs.modal', function () {
       if (!$('view-preview').classList.contains('d-none')) setStep(4);
     });

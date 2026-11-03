@@ -60,6 +60,12 @@
   .app-number { font-size: 1.45rem; font-weight: 700; color: var(--portal-navy); letter-spacing: .5px; word-break: break-all; }
   .meta-label { font-size: 11.5px; text-transform: uppercase; letter-spacing: .6px; color: var(--portal-muted); }
 
+  /* Long values typed without spaces (e.g. "HINDI,ENGLISH,PHYSICS,CHEMISTRY") must wrap
+     instead of making the page wider than a phone screen. */
+  .preview-table td, .preview-table th, .readonly-value, .original-value, .old-val, .new-val,
+  .doc-file, .app-item, .admin-table td, .admin-table th, .alert, .toast-body { overflow-wrap: anywhere; word-break: break-word; }
+  .preview-table { table-layout: fixed; width: 100%; }
+
   /* Fields */
   .form-label { font-weight: 500; font-size: 13.5px; margin-bottom: .3rem; }
   .req { color: #c0392b; margin-left: 2px; }

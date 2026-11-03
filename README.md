@@ -215,6 +215,31 @@ It prints the detected key columns and field mapping, then checks data quality, 
 
 The mock is a test aid. Always finish with tests A–D on real Google infrastructure.
 
+### F. Load testing
+
+`local-test/load-test.js` simulates many applicants at once. Each one runs in its own headless Chrome browser and goes through the real screens: open page, log in, open the application, view a document, then edit, preview and submit.
+
+> ⚠ Never load-test the live portal with `--mode submit`, because it writes to the sheet. Use a **test copy**.
+
+1. **Make a test copy.** In the response sheet choose **File → Make a copy** ("LOAD TEST copy"), open **Extensions → Apps Script** in the copy, paste in the code, run `setupPortal`, and deploy it as its own web app. You now have a test URL.
+2. **Install the tools on a PC with good internet** (Node.js 18+):
+   ```bash
+   npm install playwright
+   npx playwright install chromium
+   ```
+3. **Export the test copy** to `.xlsx` and convert it (`python local-test/xlsx-to-json.py copy.xlsx ~/sheet.json`). The test uses it to pick real logins.
+4. **Run in stages** and watch the results. Each run prints the median, 90th-percentile and maximum time per step, plus any errors:
+   ```bash
+   node local-test/load-test.js --url <TEST /exec URL> --data ~/sheet.json --users 20 --concurrency 5  --mode view
+   node local-test/load-test.js --url <TEST /exec URL> --data ~/sheet.json --users 60 --concurrency 15 --mode view
+   node local-test/load-test.js --url <TEST /exec URL> --data ~/sheet.json --users 60 --concurrency 15 --mode submit --field "स्थान"
+   node local-test/load-test.js --url <TEST /exec URL> --data ~/sheet.json --users 100 --concurrency 30 --mode submit
+   ```
+   Add `--shots ./failures` to save a screenshot of every failure, and `--headed` to watch the browsers.
+5. **Check the test sheet afterwards.** Every submitted row should have Correction Count +1 and new `Correction_Log` rows, and there should be no extra rows. In Apps Script, the **Executions** page shows the server time of every call.
+
+**What to expect from Google's limits.** Every request runs as the owner account. Google allows about **30 simultaneous executions** per account and roughly **6 minutes per call**, and submissions are processed one at a time (LockService). Above about 30 people clicking at the very same instant, some calls fail with a "server busy / could not reach the server" message and succeed when the applicant tries again. For ~1,100 applicants spread over several days that is far more than enough. If the stage-4 run shows many errors, announce the correction window in batches (for example by application-number range per day).
+
 ## 9. Troubleshooting
 | Message | Fix |
 |---|---|
