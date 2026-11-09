@@ -124,10 +124,18 @@ function requireEditorContext_() {
 var RUNTIME_ = { spreadsheet: null, logSpreadsheet: null, timeZone: null, folders: {} };
 
 function getSpreadsheetId_() {
-  var id = CONFIG.SPREADSHEET_ID;
-  if (id && id !== 'PASTE_SPREADSHEET_ID_HERE') return id;
+  var id = extractSpreadsheetId_(CONFIG.SPREADSHEET_ID);
+  if (id) return id;
   var prop = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID');
-  return prop || '';
+  return extractSpreadsheetId_(prop);
+}
+
+/** Accepts a bare ID or a full spreadsheet URL (…/spreadsheets/d/<ID>/edit…). */
+function extractSpreadsheetId_(value) {
+  var s = String(value == null ? '' : value).trim();
+  if (!s || s === 'PASTE_SPREADSHEET_ID_HERE') return '';
+  var m = s.match(/\/d\/([A-Za-z0-9_-]{20,})/);
+  return m ? m[1] : s;
 }
 
 function getSpreadsheet_() {
@@ -148,7 +156,7 @@ function getSpreadsheet_() {
 
 function getLogSpreadsheet_() {
   if (RUNTIME_.logSpreadsheet) return RUNTIME_.logSpreadsheet;
-  RUNTIME_.logSpreadsheet = CONFIG.LOG_SPREADSHEET_ID ? SpreadsheetApp.openById(CONFIG.LOG_SPREADSHEET_ID) : getSpreadsheet_();
+  RUNTIME_.logSpreadsheet = extractSpreadsheetId_(CONFIG.LOG_SPREADSHEET_ID) ? SpreadsheetApp.openById(extractSpreadsheetId_(CONFIG.LOG_SPREADSHEET_ID)) : getSpreadsheet_();
   return RUNTIME_.logSpreadsheet;
 }
 

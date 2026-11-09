@@ -23,6 +23,7 @@ var CONFIG = {
   /* ------------------------------------------------------------------ */
 
   // ID from the spreadsheet URL: https://docs.google.com/spreadsheets/d/<ID>/edit
+  // (pasting the whole URL also works – the ID is extracted automatically).
   // Leave as-is if the script is bound to the spreadsheet (Extensions > Apps Script),
   // or if you ran createSampleData() (it stores the sample sheet ID in Script Properties).
   SPREADSHEET_ID: 'PASTE_SPREADSHEET_ID_HERE',
