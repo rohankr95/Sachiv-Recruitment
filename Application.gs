@@ -46,7 +46,7 @@ function submitCorrection(token, appNo, payload) {
     var session = getSession_(token, 'applicant');
     appNo = cleanAppNo_(appNo);
     requireApplicationAccess_(session, appNo);
-    if (CONFIG.PORTAL_OPEN !== true) throw portalError_('PORTAL_CLOSED', CONFIG.PORTAL_CLOSED_MESSAGE);
+    if (!isPortalOpen_()) throw portalError_('PORTAL_CLOSED', CONFIG.PORTAL_CLOSED_MESSAGE);
     if (!payload || typeof payload !== 'object') throw portalError_('VALIDATION', 'Invalid submission.');
     if (payload.declaration !== true) throw portalError_('VALIDATION', 'Please accept the declaration before submitting.');
 
@@ -328,9 +328,13 @@ function requireNotExcluded_(ctx, row) {
 }
 
 function submissionBlockReason_(ctx, row) {
-  if (CONFIG.PORTAL_OPEN !== true) return CONFIG.PORTAL_CLOSED_MESSAGE;
+  if (!isPortalOpen_()) return CONFIG.PORTAL_CLOSED_MESSAGE;
   var count = Number(row.values[ctx.cols.count]) || 0;
   if (CONFIG.MAX_CORRECTIONS_PER_APPLICATION > 0 && count >= CONFIG.MAX_CORRECTIONS_PER_APPLICATION) {
+    if (CONFIG.MAX_CORRECTIONS_PER_APPLICATION === 1) {
+      return 'You have already used your one-time correction for this application. No further changes are allowed. / ' +
+        'इस आवेदन के लिए एक बार का सुधार पहले ही किया जा चुका है। अब कोई और परिवर्तन संभव नहीं है।';
+    }
     return 'The maximum number of corrections (' + CONFIG.MAX_CORRECTIONS_PER_APPLICATION + ') has already been made for this application.';
   }
   return '';

@@ -20,6 +20,8 @@ const fail = (r, code) => { assert.strictEqual(r.ok, false, 'expected failure, g
 
 function bootstrap() {
   const g = createContext({ verbose: false });
+  g.CONFIG.MAX_CORRECTIONS_PER_APPLICATION = 0; // these tests submit several times per row
+  g.CONFIG.CORRECTION_DEADLINE = '';
   const t0 = Date.now();
   g.createSampleData();
   const tSample = Date.now() - t0;
@@ -421,6 +423,30 @@ test('rows without a date of birth are excluded (no login, no load, not counted)
   assert.strictEqual(after.totalApplications, before.totalApplications - 1);
   assert.strictEqual(after.excludedIncomplete, 1);
   assert.strictEqual(ok(g.adminGetApplication(admin, 'APP202600100')).excluded, true);
+});
+
+test('automatic deadline closes the portal; one-time correction is enforced', () => {
+  const row = rowOf('APP202600200');
+  const t = ok(g.login(cell(row, 'Email Address'), dobIso(row))).token;
+  g.CONFIG.CORRECTION_DEADLINE = new Date(Date.now() - 60000).toISOString();   // just passed
+  let a = ok(g.loadApplication(t, 'APP202600200'));
+  assert.strictEqual(a.canSubmit, false);
+  fail(g.submitCorrection(t, 'APP202600200', { version: a.version, declaration: true, changes: { 'Block': 'Odgi' } }), 'PORTAL_CLOSED');
+  fail(g.uploadReplacement(t, 'APP202600200', 'Photograph', { fileName: 'a.pdf', mimeType: 'application/pdf', data: PDF_B64 }), 'PORTAL_CLOSED');
+  assert.strictEqual(g.getPublicConfig_(false).portalOpen, false);
+  g.CONFIG.CORRECTION_DEADLINE = '2026-11-10T23:59:59+05:30';
+  g.CONFIG.MAX_CORRECTIONS_PER_APPLICATION = 1;
+  const open = Date.now() <= Date.parse(g.CONFIG.CORRECTION_DEADLINE);
+  if (open) {
+    a = ok(g.loadApplication(t, 'APP202600200'));
+    ok(g.submitCorrection(t, 'APP202600200', { version: a.version, declaration: true, changes: { 'Block': 'Odgi' } }));
+    a = ok(g.loadApplication(t, 'APP202600200'));
+    assert.strictEqual(a.canSubmit, false);
+    assert.match(a.blockedReason, /one-time correction/);
+    fail(g.submitCorrection(t, 'APP202600200', { version: a.version, declaration: true, changes: { 'Block': 'Surajpur' } }), 'NOT_ALLOWED');
+  }
+  g.CONFIG.MAX_CORRECTIONS_PER_APPLICATION = 0;
+  g.CONFIG.CORRECTION_DEADLINE = '';
 });
 
 console.log(results.join('\n'));

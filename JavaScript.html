@@ -174,6 +174,11 @@
       show('portalClosedNotice', true);
     }
     $('supportText').textContent = CFG.supportText || '';
+    var rules = [];
+    if (CFG.deadlineText) rules.push('<i class="fa-regular fa-calendar-xmark me-1"></i><strong>Last date / अंतिम तिथि:</strong> ' + h(CFG.deadlineText));
+    if (CFG.maxCorrections === 1) rules.push('<i class="fa-solid fa-circle-exclamation me-1"></i><strong>Only one correction is allowed per application. / प्रत्येक आवेदन में केवल एक बार सुधार किया जा सकता है।</strong>');
+    if (CFG.maxCorrections === 1) rules.push('If all your details are already correct, do not submit any correction. / यदि आपकी सभी जानकारी पहले से सही है, तो कोई सुधार सबमिट न करें।');
+    if (rules.length) { $('rulesNotice').innerHTML = rules.join('<br>'); show('rulesNotice', true); }
     $('loginIdentifier').addEventListener('input', function () {
       var v = this.value.trim();
       $('identifierIcon').className = v.indexOf('@') !== -1 ? 'fa-solid fa-at' : (/^[+\d\s-]+$/.test(v) && v ? 'fa-solid fa-mobile-screen' : 'fa-solid fa-at');
@@ -302,6 +307,12 @@
     show('editDuplicateFlag', dupHtml.length > 0);
     show('btnBackToList', S.applications.length > 1);
 
+    var once = CFG.maxCorrections === 1 && app.canSubmit;
+    $('oneTimeNotice').innerHTML = once ? '<i class="fa-solid fa-circle-exclamation me-1"></i><strong>One-time correction:</strong> you can submit changes only once' +
+      (CFG.deadlineText ? ', before ' + h(CFG.deadlineText) : '') + '. If all your details are correct, do not submit anything.<br>' +
+      '<strong>एक बार का सुधार:</strong> आप केवल एक बार परिवर्तन सबमिट कर सकते हैं' + (CFG.deadlineText ? ' (अंतिम तिथि ' + h(CFG.deadlineText) + ')' : '') +
+      '। यदि आपकी सभी जानकारी सही है, तो कुछ भी सबमिट न करें।' : '';
+    show('oneTimeNotice', once);
     if (!app.canSubmit) {
       $('editBlocked').textContent = app.blockedReason;
       show('editBlocked', true);
@@ -778,6 +789,7 @@
     var changed = changedFields();
     var docs = stagedDocs();
     $('confirmAppNo').textContent = S.app.applicationNumber;
+    show('confirmOnce', CFG.maxCorrections === 1);
     $('confirmSummary').innerHTML = '<li>' + changed.length + ' field(s) will be updated</li><li>' + docs.length + ' document(s) will be replaced</li>';
     setStep(5);
     // Enabled on 'shown.bs.modal': Bootstrap ignores hide() while the dialog is still

@@ -16,6 +16,8 @@ const DEPS = process.env.UI_DEPS ? path.join(process.env.UI_DEPS, 'node_modules'
 fs.mkdirSync(OUT, { recursive: true });
 
 const g = createContext();
+g.CONFIG.MAX_CORRECTIONS_PER_APPLICATION = 0; // these tests submit several times per row
+g.CONFIG.CORRECTION_DEADLINE = '';
 g.createSampleData();
 g.setupPortal();
 g.__state.props.set('NEW_ADMIN_USERNAME', 'admin');

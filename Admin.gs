@@ -104,7 +104,7 @@ function adminGetDashboard(token) {
         duplicateEmailRecords: dupRecords
       },
       approvalEnabled: CONFIG.REQUIRE_APPROVAL === true,
-      portalOpen: CONFIG.PORTAL_OPEN === true,
+      portalOpen: isPortalOpen_(),
       recent: log.recent
     };
   });

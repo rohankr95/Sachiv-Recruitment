@@ -148,9 +148,13 @@ var CONFIG = {
   /* Workflow                                                            */
   /* ------------------------------------------------------------------ */
   PORTAL_OPEN: true,                     // false = applicants can log in and view but not submit
-  PORTAL_CLOSED_MESSAGE: 'The correction window is currently closed.',
+  // The portal closes automatically after this moment (ISO date-time with +05:30 for IST).
+  // Use '' for no automatic closing. CORRECTION_DEADLINE_TEXT is what applicants see.
+  CORRECTION_DEADLINE: '2026-11-10T23:59:59+05:30',
+  CORRECTION_DEADLINE_TEXT: '10/11/2026, 11:59 PM',
+  PORTAL_CLOSED_MESSAGE: 'The correction window is closed. / सुधार की अवधि समाप्त हो चुकी है।',
   REQUIRE_APPROVAL: false,               // true = corrections are marked "Pending Approval" for admin review
-  MAX_CORRECTIONS_PER_APPLICATION: 0,    // 0 = unlimited
+  MAX_CORRECTIONS_PER_APPLICATION: 1,    // 1 = one-time correction; 0 = unlimited
 
   STATUS: {
     MODIFIED: 'Modified',

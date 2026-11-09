@@ -45,12 +45,24 @@ function include(filename) {
  * The only configuration values the browser ever receives. No IDs, no
  * credentials, no folder names.
  */
+/** True while corrections may be submitted (manual switch + automatic deadline). */
+function isPortalOpen_() {
+  if (CONFIG.PORTAL_OPEN !== true) return false;
+  if (CONFIG.CORRECTION_DEADLINE) {
+    var closesAt = Date.parse(CONFIG.CORRECTION_DEADLINE);
+    if (!isNaN(closesAt) && Date.now() > closesAt) return false;
+  }
+  return true;
+}
+
 function getPublicConfig_(isAdmin) {
   return {
     portalTitle: CONFIG.PORTAL_TITLE,
     organisation: CONFIG.ORGANISATION_NAME,
     supportText: CONFIG.SUPPORT_TEXT,
-    portalOpen: CONFIG.PORTAL_OPEN === true,
+    portalOpen: isPortalOpen_(),
+    deadlineText: CONFIG.CORRECTION_DEADLINE ? (CONFIG.CORRECTION_DEADLINE_TEXT || CONFIG.CORRECTION_DEADLINE) : '',
+    maxCorrections: CONFIG.MAX_CORRECTIONS_PER_APPLICATION || 0,
     portalClosedMessage: CONFIG.PORTAL_CLOSED_MESSAGE,
     idleTimeoutSeconds: (isAdmin ? CONFIG.SESSION.ADMIN_IDLE_TIMEOUT_MINUTES : CONFIG.SESSION.IDLE_TIMEOUT_MINUTES) * 60,
     maxFileSizeMb: CONFIG.UPLOAD.MAX_FILE_SIZE_MB,

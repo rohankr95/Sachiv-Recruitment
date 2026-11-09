@@ -13,6 +13,8 @@ const { createContext, loadSheetJson } = require('./gas-mock');
 const data = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const OUT = process.argv[3] || null;
 const g = createContext();
+g.CONFIG.MAX_CORRECTIONS_PER_APPLICATION = 0; // these tests submit several times per row
+g.CONFIG.CORRECTION_DEADLINE = '';
 const { sheet } = loadSheetJson(g, data);
 const log = [];
 const say = s => { log.push(s); console.log(s); };

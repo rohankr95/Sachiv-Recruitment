@@ -36,7 +36,7 @@ function uploadReplacement(token, appNo, fieldKey, upload) {
     var session = getSession_(token, 'applicant');
     appNo = cleanAppNo_(appNo);
     requireApplicationAccess_(session, appNo);
-    if (CONFIG.PORTAL_OPEN !== true) throw portalError_('PORTAL_CLOSED', CONFIG.PORTAL_CLOSED_MESSAGE);
+    if (!isPortalOpen_()) throw portalError_('PORTAL_CLOSED', CONFIG.PORTAL_CLOSED_MESSAGE);
     if (!upload || typeof upload !== 'object') throw portalError_('VALIDATION', 'No file received.');
 
     var ctx = getSheetContext_();

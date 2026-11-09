@@ -58,6 +58,7 @@ Applicants log in with their **registered email address or mobile number plus da
   * **`SHOW_ALL`:** once the DOB matches any row, **all** applications on that email/mobile are listed and marked Duplicate. Use this only if you are sure shared emails always belong to the same person, because otherwise one applicant can edit another's record.
   * The admin dashboard has a **Duplicate registrations** tab that lists every shared email/mobile. It flags groups whose DOBs differ ("likely different persons").
 * **Incomplete applications are excluded** (`EXCLUDE_ROWS_WITHOUT_DOB: true`). A row with no valid date of birth, for example because the Google Form ended after an ineligible answer, cannot log in, be opened or be corrected. The admin dashboard counts these rows separately as "incomplete excluded" and marks them in the application view.
+* **Correction window and one-time rule.** `CORRECTION_DEADLINE` (currently `2026-11-10T23:59:59+05:30`) closes the portal automatically, with no manual step needed. `MAX_CORRECTIONS_PER_APPLICATION: 1` allows each application only one correction. Applicants see both rules on the login page, the edit page and the final confirmation dialog.
 * After 5 failed attempts the email/mobile is locked for 15 minutes, and every failure adds a 1-second server delay (configurable in `RATE_LIMIT`). Failure messages never say whether the email exists.
 * Sessions expire after 15 minutes of inactivity (with a warning at 2 minutes, and typing in the form keeps the session alive), and after 90 minutes in any case.
 
