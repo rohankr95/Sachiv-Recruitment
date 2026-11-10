@@ -170,7 +170,16 @@
   function initLogin() {
     $('loginDob').max = todayIso();
     if (!CFG.portalOpen) {
-      $('portalClosedNotice').textContent = CFG.portalClosedMessage + ' You can log in to view your application, but corrections cannot be submitted.';
+      if (CFG.closedAllowLogin) {
+        $('portalClosedNotice').textContent = CFG.portalClosedMessage + ' You can log in to view your application, but corrections cannot be submitted.';
+      } else {
+        // Closed: show only the notice, no login form.
+        $('portalClosedNotice').className = 'alert alert-danger fs-6 mb-0';
+        $('portalClosedNotice').innerHTML = '<i class="fa-solid fa-lock me-2"></i>' + h(CFG.portalClosedMessage).replace(' / ', '<br><br>');
+        show('loginForm', false);
+        document.querySelectorAll('#view-login hr, #view-login ul, #view-login .text-center p').forEach(function (el) { el.classList.add('d-none'); });
+        $('loginTitle').textContent = 'Correction Portal Closed / सुधार पोर्टल बंद';
+      }
       show('portalClosedNotice', true);
     }
     $('supportText').textContent = CFG.supportText || '';
@@ -178,7 +187,7 @@
     if (CFG.deadlineText) rules.push('<i class="fa-regular fa-calendar-xmark me-1"></i><strong>Last date / अंतिम तिथि:</strong> ' + h(CFG.deadlineText));
     if (CFG.maxCorrections === 1) rules.push('<i class="fa-solid fa-circle-exclamation me-1"></i><strong>Only one correction is allowed per application. / प्रत्येक आवेदन में केवल एक बार सुधार किया जा सकता है।</strong>');
     if (CFG.maxCorrections === 1) rules.push('If all your details are already correct, do not submit any correction. / यदि आपकी सभी जानकारी पहले से सही है, तो कोई सुधार सबमिट न करें।');
-    if (rules.length) { $('rulesNotice').innerHTML = rules.join('<br>'); show('rulesNotice', true); }
+    if (rules.length && CFG.portalOpen) { $('rulesNotice').innerHTML = rules.join('<br>'); show('rulesNotice', true); }
     $('loginIdentifier').addEventListener('input', function () {
       var v = this.value.trim();
       $('identifierIcon').className = v.indexOf('@') !== -1 ? 'fa-solid fa-at' : (/^[+\d\s-]+$/.test(v) && v ? 'fa-solid fa-mobile-screen' : 'fa-solid fa-at');
@@ -899,6 +908,7 @@
 
   function resume() {
     var token = storage('get');
+    if (!CFG.portalOpen && !CFG.closedAllowLogin) { storage('del'); showView('login'); return; }
     if (!token) { showView('login'); return; }
     S.token = token;
     call('getMyApplications', [token], { loading: 'Restoring your session…' }).then(function (data) {

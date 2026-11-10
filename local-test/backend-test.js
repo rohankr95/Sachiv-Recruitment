@@ -449,5 +449,17 @@ test('automatic deadline closes the portal; one-time correction is enforced', ()
   g.CONFIG.CORRECTION_DEADLINE = '';
 });
 
+test('closed portal: login refused with the closing message unless CLOSED_ALLOW_LOGIN', () => {
+  const row = rowOf('APP202600300');
+  g.CONFIG.PORTAL_OPEN = false;
+  const r = fail(g.login(cell(row, 'Email Address'), dobIso(row)), 'PORTAL_CLOSED');
+  assert.match(r.message, /portal is now closed/);
+  assert.ok(g.doGet({ parameter: {} }).getContent().includes('closedAllowLogin'));
+  g.CONFIG.CLOSED_ALLOW_LOGIN = true;
+  ok(g.login(cell(row, 'Email Address'), dobIso(row)));
+  g.CONFIG.CLOSED_ALLOW_LOGIN = false;
+  g.CONFIG.PORTAL_OPEN = true;
+});
+
 console.log(results.join('\n'));
 console.log('\n' + passed + '/' + results.length + ' passed. (sample data generation: ' + tSample + ' ms in mock)');

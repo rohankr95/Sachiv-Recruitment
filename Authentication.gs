@@ -27,6 +27,9 @@ var RATE_PREFIX_ = 'RL_';
  */
 function login(identifier, dob) {
   return respond_(function () {
+    if (!isPortalOpen_() && CONFIG.CLOSED_ALLOW_LOGIN !== true) {
+      throw portalError_('PORTAL_CLOSED', CONFIG.PORTAL_CLOSED_MESSAGE);
+    }
     var parsed = parseIdentifier_(identifier);
     var dobIso = parseDobInput_(dob);
 
